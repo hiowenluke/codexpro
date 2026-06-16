@@ -172,12 +172,6 @@ The clean GitHub Pages URL for this project is:
 https://rebel0789.github.io/codexpro/
 ```
 
-## Why did it redirect to Scrivora before?
-
-The account-level `rebel0789.github.io` Pages repo had a `CNAME` file pointing to `scrivora.me`. GitHub applies account-level Pages custom domains to project pages too, so `rebel0789.github.io/codexpro/` redirected to `scrivora.me/codexpro/`.
-
-That `CNAME` has been removed.
-
 ## Is CodexPro production safe?
 
 CodexPro is a local developer bridge, not an OS sandbox.
