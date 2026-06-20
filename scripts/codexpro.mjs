@@ -314,6 +314,33 @@ function commandExists(command) {
   return result.status === 0;
 }
 
+function commandPaths(command) {
+  if (process.platform === 'win32') {
+    const result = spawnSync('where', [command], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (result.status !== 0) return [];
+    return String(result.stdout)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+  const result = spawnSync('command', ['-v', command], { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  if (result.status !== 0) return [];
+  return String(result.stdout)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function resolveCodexCommand() {
+  const explicit = process.env.CODEXPRO_CODEX_BIN;
+  if (explicit) return resolveExecutablePath(explicit);
+  if (process.platform !== 'win32') return 'codex';
+
+  const candidates = commandPaths('codex');
+  const spawnable = candidates.find((candidate) => /\.(cmd|exe|bat)$/i.test(candidate));
+  return spawnable || 'codex';
+}
+
 function isPathLike(command) {
   return command.includes('/') || command.includes('\\') || command.startsWith('.');
 }
@@ -1026,12 +1053,42 @@ function buildExecutorCommand(args, root, planPath, planText) {
     };
   }
   if (agent === 'codex') {
+    const codexLastMessagePath = path.join(path.dirname(planPath), 'codex-last-message.md');
+    const relativePlanPath = path.relative(root, planPath) || planPath;
+    const codexPrompt = [
+      `Read the handoff plan at ${relativePlanPath} and execute it in this workspace.`,
+      'Keep changes scoped to that plan.',
+      'Do not modify .ai-bridge/current-plan.md.',
+      'When finished, summarize changed files and verification.'
+    ].join('\n');
     return {
       agent,
       model,
-      command: 'codex',
-      args: ['exec', ...(model ? ['--model', model] : []), planText],
-      displayArgs: ['exec', ...(model ? ['--model', model] : []), '<plan_text>'],
+      command: resolveCodexCommand(),
+      args: [
+        'exec',
+        '--ephemeral',
+        '--sandbox',
+        'workspace-write',
+        '-c',
+        'approval_policy="never"',
+        '--output-last-message',
+        codexLastMessagePath,
+        ...(model ? ['--model', model] : []),
+        codexPrompt
+      ],
+      displayArgs: [
+        'exec',
+        '--ephemeral',
+        '--sandbox',
+        'workspace-write',
+        '-c',
+        'approval_policy="never"',
+        '--output-last-message',
+        path.relative(root, codexLastMessagePath),
+        ...(model ? ['--model', model] : []),
+        `<read ${relativePlanPath}>`
+      ],
       custom: false
     };
   }
@@ -1122,11 +1179,27 @@ function readGitDiff(root, maxBytes) {
   return trimBytes(diff, maxBytes).text;
 }
 
+function readGitStatus(root, maxBytes) {
+  const result = spawnSync('git', ['status', '--short'], {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: Math.max(maxBytes * 2, 1_000_000),
+    shell: false
+  });
+  if (result.status !== 0) {
+    const reason = result.stderr || result.stdout || `git status exited ${result.status}`;
+    return `# git status unavailable\n\n${redactForLog(reason).trim()}\n`;
+  }
+  const status = result.stdout || '';
+  if (!status.trim()) return '';
+  return trimBytes(status, maxBytes).text;
+}
+
 function codeBlock(label, value) {
   return `## ${label}\n\n\`\`\`text\n${String(value || '').replace(/```/g, '`\\`\\`') || '(empty)'}\n\`\`\`\n`;
 }
 
-function writeExecutionOutputs(root, contextDir, commandInfo, result, diffText) {
+function writeExecutionOutputs(root, contextDir, commandInfo, result, diffText, gitStatusText) {
   const bridgeDir = resolveWorkspaceFile(root, contextDir);
   fs.mkdirSync(bridgeDir, { recursive: true, mode: 0o700 });
   const statusPath = path.join(bridgeDir, 'agent-status.md');
@@ -1147,6 +1220,8 @@ function writeExecutionOutputs(root, contextDir, commandInfo, result, diffText) 
     `Diff path: ${path.posix.join(contextDir, 'implementation-diff.patch')}`,
     `Execution log: ${path.posix.join(contextDir, 'execution-log.jsonl')}`,
     '',
+    codeBlock('Git status excerpt', gitStatusText),
+    '',
     codeBlock('Stdout excerpt', result.stdout),
     codeBlock('Stderr excerpt', result.stderr)
   ].filter(Boolean).join('\n');
@@ -1164,6 +1239,7 @@ function writeExecutionOutputs(root, contextDir, commandInfo, result, diffText) 
     duration_ms: result.durationMs,
     stdout_excerpt: result.stdout,
     stderr_excerpt: result.stderr,
+    git_status_excerpt: gitStatusText || undefined,
     diff_path: path.posix.join(contextDir, 'implementation-diff.patch'),
     status_path: path.posix.join(contextDir, 'agent-status.md')
   };
@@ -1248,7 +1324,8 @@ async function executeHandoffRequest(request, args, options = {}) {
     maxOutputBytes: request.maxOutputBytes
   });
   const diffText = readGitDiff(request.root, request.maxOutputBytes);
-  const outputs = writeExecutionOutputs(request.root, request.contextDir, request.commandInfo, result, diffText);
+  const gitStatusText = readGitStatus(request.root, request.maxOutputBytes);
+  const outputs = writeExecutionOutputs(request.root, request.contextDir, request.commandInfo, result, diffText, gitStatusText);
   statusLine(result.exitCode === 0 ? 'ok' : 'warn', `Agent exited with code ${result.exitCode ?? 'null'}${result.signal ? ` signal=${result.signal}` : ''}`);
   console.log(`Status: ${path.relative(request.root, outputs.statusPath)}`);
   console.log(`Diff:   ${path.relative(request.root, outputs.diffPath)}`);
