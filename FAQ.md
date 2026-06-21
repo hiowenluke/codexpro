@@ -163,9 +163,13 @@ For most users, the better path is a free ngrok dev domain. Create a free ngrok 
 
 If you own a domain, use Cloudflare named tunnels and route DNS to a hostname like `codexpro.example.com`.
 
-## Why does a Cloudflare quick-tunnel URL fail in ChatGPT or return Error 1033?
+## Why does ChatGPT show “Something went wrong” when I create a connector?
 
-Creating a `trycloudflare.com` URL is not proof that the tunnel is connected. ChatGPT validates the public MCP endpoint when you create the app. If `cloudflared` exits after printing the URL, ChatGPT can show a generic connection error and Cloudflare can return `530` / `Error 1033`.
+ChatGPT can show this generic banner when its public MCP check fails:
+
+![ChatGPT connector creation error](docs/images/chatgpt-connector-creation-error.png)
+
+One cause is a Cloudflare quick tunnel that printed a `trycloudflare.com` URL and then exited. Creating the URL is not proof that the tunnel is connected. When the tunnel is gone, ChatGPT cannot reach the MCP endpoint and Cloudflare can return `530` / `Error 1033`.
 
 Start with tunnel logs enabled:
 
@@ -186,7 +190,38 @@ Could not lookup srv records on _v2-origintunneld._tcp.argotunnel.com
 ... cannot unmarshal DNS message
 ```
 
-Set the DNS servers for the active operating-system network connection to a standards-compliant resolver, for example `1.1.1.1` and `1.0.0.1`, then reconnect the network and restart CodexPro. If a proxy client manages DNS, enable its system DNS integration or TUN DNS hijacking; changing only the proxy client's internal nameserver list may not affect `cloudflared`.
+### Fix DNS on macOS
+
+1. Open **System Settings** > **Network**.
+2. Select the connection currently carrying your Internet traffic (usually Wi-Fi or Ethernet), then click **Details…**.
+3. Open **DNS**. Remove the problematic router or proxy DNS server if it is listed, then add these servers with the **+** button:
+
+   ```text
+   1.1.1.1
+   1.0.0.1
+   ```
+
+4. Click **OK**, then **Apply**. Disconnect and reconnect the network connection.
+5. Optionally flush the macOS DNS cache:
+
+   ```bash
+   sudo dscacheutil -flushcache
+   sudo killall -HUP mDNSResponder
+   ```
+
+6. Confirm that the active macOS resolver no longer lists the old DNS server:
+
+   ```bash
+   scutil --dns | grep 'nameserver\[[0-9]*\]'
+   ```
+
+7. Restart CodexPro and check its tunnel logs again:
+
+   ```bash
+   codexpro start --log-requests
+   ```
+
+If a proxy client manages DNS, changing only its internal `nameserver` list may not affect `cloudflared`: `cloudflared` uses the macOS system resolver. Enable the proxy client's system DNS integration or TUN DNS hijacking, then repeat the `scutil --dns` check above. On managed or corporate networks, use an approved DNS resolver instead of changing system DNS yourself.
 
 After the tunnel registers, use the newly printed Server URL and keep the `codexpro start` process running. A quick-tunnel URL includes a bearer token, so do not share it in issues, screenshots, or chat messages.
 
