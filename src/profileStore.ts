@@ -31,6 +31,7 @@ export interface WorkspaceProfile {
   requireBashSession?: boolean;
   write?: WriteMode | string;
   toolMode?: ToolMode | string;
+  toolCards?: boolean;
   widgetDomain?: string;
   noInstallCloudflared?: boolean;
 }
@@ -51,6 +52,7 @@ export interface RuntimeConnection {
   requireBashSession?: boolean;
   write?: WriteMode | string;
   toolMode?: ToolMode | string;
+  toolCards?: boolean;
 }
 
 export function codexProHome(): string {

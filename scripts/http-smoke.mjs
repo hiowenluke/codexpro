@@ -181,6 +181,7 @@ const child = spawn('node', ['dist/http.js'], {
     CODEXPRO_BASH_MODE: 'safe',
     CODEXPRO_WRITE_MODE: 'handoff',
     CODEXPRO_TOOL_MODE: 'full',
+    CODEXPRO_TOOL_CARDS: '0',
     CODEXPRO_WIDGET_DOMAIN: 'https://widgets.codexpro.test',
     CODEXPRO_HOME: profileHome
   },
@@ -224,7 +225,7 @@ try {
   if (!homeText.includes('Connection profile') || !homeText.includes('data-profile-form')) {
     throw new Error('onboarding page did not include the saved profile editor');
   }
-  for (const fieldName of ['tunnelName', 'ngrokConfig', 'cloudflareConfig', 'cloudflareTokenFile', 'noInstallCloudflared']) {
+  for (const fieldName of ['tunnelName', 'ngrokConfig', 'cloudflareConfig', 'cloudflareTokenFile', 'toolCards', 'noInstallCloudflared']) {
     if (!homeText.includes(`name="${fieldName}"`)) {
       throw new Error(`onboarding page did not include profile field ${fieldName}`);
     }
@@ -272,6 +273,7 @@ try {
       requireBashSession: true,
       write: 'workspace',
       toolMode: 'full',
+      toolCards: true,
       widgetDomain: 'https://widgets.codexpro.test',
       ngrokConfig: path.join(root, 'ngrok.yml'),
       cloudflareTokenFile: 'cloudflare-token',
@@ -293,6 +295,7 @@ try {
     savedProfile.codexSessions !== 'metadata' ||
     savedProfile.bashSession !== 'http-main' ||
     savedProfile.requireBashSession !== true ||
+    savedProfile.toolCards !== true ||
     savedProfile.ngrokConfig !== path.join(root, 'ngrok.yml') ||
     savedProfile.cloudflareTokenFile !== path.join(realRoot, 'cloudflare-token') ||
     savedProfile.noInstallCloudflared !== true ||

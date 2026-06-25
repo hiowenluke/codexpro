@@ -73,6 +73,7 @@ const AdminProfilePatch = z.object({
   requireBashSession: z.boolean().optional(),
   write: z.enum(WRITE_MODES).optional(),
   toolMode: z.enum(TOOL_MODES).optional(),
+  toolCards: z.boolean().optional(),
   widgetDomain: textField(2048),
   tunnelName: textField(128),
   ngrokConfig: textField(4096),
@@ -100,6 +101,7 @@ interface ProfileFormValues {
   requireBashSession: boolean;
   write: "off" | "handoff" | "workspace";
   toolMode: "minimal" | "standard" | "full";
+  toolCards: boolean;
   widgetDomain: string;
   noInstallCloudflared: boolean;
 }
@@ -176,6 +178,7 @@ function profileValues(config: CodexProConfig, profile = readWorkspaceProfile(co
     requireBashSession: Boolean(profile.requireBashSession ?? config.requireBashSession),
     write,
     toolMode: oneOf(profile.toolMode ?? config.toolMode, TOOL_MODES, config.toolMode),
+    toolCards: Boolean(profile.toolCards ?? config.toolCards),
     widgetDomain: String(profile.widgetDomain ?? config.widgetDomain),
     noInstallCloudflared: Boolean(profile.noInstallCloudflared)
   };
@@ -300,6 +303,7 @@ function profileForm(config: CodexProConfig): string {
             <label><span>Codex directory</span><input name="codexDir" value="${escapeHtml(values.codexDir)}"></label>
             <label><span>Bash session</span><input name="bashSession" value="${escapeHtml(values.bashSession)}"></label>
           </div>
+          <label class="check-row"><input name="toolCards" type="checkbox" value="true"${values.toolCards ? " checked" : ""}><span>Enable ChatGPT tool cards</span></label>
           <label class="check-row"><input name="requireBashSession" type="checkbox" value="true"${values.requireBashSession ? " checked" : ""}><span>Require matching bash session id</span></label>
         </fieldset>
         <fieldset class="profile-group readonly-group">
@@ -361,6 +365,7 @@ function buildProfilePayload(config: CodexProConfig, existing: WorkspaceProfile,
     ...(next.requireBashSession ? { requireBashSession: true } : {}),
     write,
     toolMode: next.toolMode,
+    toolCards: next.toolCards,
     ...(next.widgetDomain ? { widgetDomain: next.widgetDomain } : {}),
     ...(next.noInstallCloudflared ? { noInstallCloudflared: true } : {})
   };
@@ -384,6 +389,7 @@ function profileResponse(config: CodexProConfig): Record<string, unknown> {
       codexSessions: config.codexSessions,
       writeMode: config.writeMode,
       toolMode: config.toolMode,
+      toolCards: config.toolCards,
       widgetDomain: config.widgetDomain,
       authEnabled: Boolean(config.authToken)
     }
@@ -1372,6 +1378,7 @@ function onboardingPage(config: CodexProConfig): string {
           bash: data.bash,
           write: data.write,
           toolMode: data.toolMode,
+          toolCards: Boolean(form.elements.toolCards?.checked),
           codexSessions: data.codexSessions,
           codexDir: data.codexDir,
           bashSession: data.bashSession,
