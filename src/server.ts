@@ -84,6 +84,20 @@ function toolCardMeta(): Record<string, unknown> {
   };
 }
 
+const OPTIONAL_TOOL_CARD_META = [
+  "ui",
+  "openai/outputTemplate",
+  "openai/toolInvocation/invoking",
+  "openai/toolInvocation/invoked"
+] as const;
+
+function descriptorOptionsForConfig(config: CodexProConfig, options: Record<string, unknown>): Record<string, unknown> {
+  if (config.toolCards) return options;
+  const meta = { ...((options._meta as Record<string, unknown> | undefined) ?? {}) };
+  for (const key of OPTIONAL_TOOL_CARD_META) delete meta[key];
+  return { ...options, _meta: meta };
+}
+
 function toolCallLoggingEnabled(): boolean {
   return process.env.CODEXPRO_LOG_TOOL_CALLS === "1" || process.env.CODEXPRO_LOG_REQUESTS === "1";
 }
@@ -315,7 +329,7 @@ function registerCodexTool(
   handler: (args: any) => Promise<any> | any
 ): void {
   if (!shouldRegisterTool(config, name)) return;
-  registerToolCompat(server, name, options, handler);
+  registerToolCompat(server, name, descriptorOptionsForConfig(config, options), handler);
   rememberRegisteredTool(server, name);
 }
 
@@ -647,6 +661,7 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         codexDir: config.codexDir,
         writeMode: config.writeMode,
         toolMode: config.toolMode,
+        toolCards: config.toolCards,
         inheritEnv: config.inheritEnv,
         contextDir: config.contextDir,
         maxReadBytes: config.maxReadBytes,

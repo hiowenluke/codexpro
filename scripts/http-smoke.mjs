@@ -126,6 +126,12 @@ function hasWidgetMeta(tools, name, uri) {
   return meta.ui?.resourceUri === uri && meta['openai/outputTemplate'] === uri;
 }
 
+function hasToolCardStatusMeta(tools, name) {
+  const tool = tools.find((item) => item.name === name);
+  const meta = tool?._meta ?? {};
+  return Boolean(meta['openai/toolInvocation/invoking'] || meta['openai/toolInvocation/invoked']);
+}
+
 await expectHttpTokenRequired('non-loopback', { CODEXPRO_HOST: '0.0.0.0' });
 await expectHttpTokenRequired('tunnel-mode', { CODEXPRO_TUNNEL_MODE: '1' });
 
@@ -309,8 +315,8 @@ try {
   }
   const toolCardUri = 'ui://widget/codexpro-tool-card-v9.html';
   for (const visualTool of queryToolNames) {
-    if (!hasWidgetMeta(queryTools, visualTool, toolCardUri)) {
-      throw new Error(`${visualTool} should render the CodexPro widget`);
+    if (hasWidgetMeta(queryTools, visualTool, toolCardUri) || hasToolCardStatusMeta(queryTools, visualTool)) {
+      throw new Error(`${visualTool} exposed widget metadata while CODEXPRO_TOOL_CARDS is off`);
     }
   }
 

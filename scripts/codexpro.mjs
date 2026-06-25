@@ -71,6 +71,7 @@ Options:
                              full = expose every compatibility and advanced tool.
   --widget-domain <origin>   Dedicated HTTPS origin for ChatGPT widget iframes.
                              Required for app submission. Default: https://rebel0789.github.io.
+  --tool-cards <on|off>      Opt in to ChatGPT widget metadata on tool descriptors. Default: off.
   --tunnel <none|cloudflare|cloudflare-named|ngrok>
                              Expose local MCP. Default: cloudflare.
                              cloudflare = quick tunnel with a new URL each restart.
@@ -516,7 +517,8 @@ function saveRuntimeConnection(root, details, options = {}) {
     bashSession: options.bashSession ?? '',
     requireBashSession: Boolean(options.requireBashSession),
     write: options.write ?? '',
-    toolMode: options.toolMode ?? ''
+    toolMode: options.toolMode ?? '',
+    toolCards: Boolean(options.toolCards)
   };
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   try {
@@ -3249,6 +3251,7 @@ async function main() {
   const write = writeOption(args, profile, mode);
   const toolMode = optionValue(args, profile, 'toolMode', ['CODEXPRO_TOOL_MODE'], 'standard');
   const widgetDomain = optionValue(args, profile, 'widgetDomain', ['CODEXPRO_WIDGET_DOMAIN'], 'https://rebel0789.github.io');
+  const toolCards = optionBool(args, profile, 'toolCards', ['CODEXPRO_TOOL_CARDS'], false);
   if (!['off', 'safe', 'full'].includes(bash)) throw new Error('--bash must be off, safe, or full');
   if (!['off', 'handoff', 'workspace'].includes(write)) throw new Error('--write must be off, handoff, or workspace');
   if (!['minimal', 'standard', 'full'].includes(toolMode)) throw new Error('--tool-mode must be minimal, standard, or full');
@@ -3270,6 +3273,7 @@ async function main() {
     CODEXPRO_WRITE_MODE: write,
     CODEXPRO_TOOL_MODE: toolMode,
     CODEXPRO_WIDGET_DOMAIN: widgetDomain,
+    CODEXPRO_TOOL_CARDS: toolCards ? '1' : '0',
     CODEXPRO_MODE: mode,
     CODEXPRO_TUNNEL_MODE: tunnel === 'none' ? '0' : '1'
   };

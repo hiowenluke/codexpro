@@ -33,6 +33,7 @@ export interface CodexProConfig {
   httpSessionTtlMs: number;
   blockedGlobs: string[];
   contextDir: string;
+  toolCards: boolean;
 }
 
 const DEFAULT_BLOCKED_GLOBS = [
@@ -266,6 +267,12 @@ export function loadConfig(argv = process.argv.slice(2)): CodexProConfig {
   const writeArg = typeof args.write === "string" ? args.write : undefined;
   const toolModeArg = typeof args["tool-mode"] === "string" ? args["tool-mode"] : undefined;
   const widgetDomainArg = typeof args["widget-domain"] === "string" ? args["widget-domain"] : undefined;
+  const toolCardsArg =
+    args["tool-cards"] === true
+      ? "true"
+      : typeof args["tool-cards"] === "string"
+        ? args["tool-cards"]
+        : undefined;
   const extraBlockedGlobs = splitList(process.env.CODEXPRO_BLOCKED_GLOBS, ",");
   const host = hostArg ?? process.env.HOST ?? process.env.CODEXPRO_HOST ?? "127.0.0.1";
   const authToken = process.env.CODEXPRO_HTTP_TOKEN ?? process.env.CODEBASE_BRIDGE_HTTP_TOKEN;
@@ -304,6 +311,7 @@ export function loadConfig(argv = process.argv.slice(2)): CodexProConfig {
     maxHttpSessions: numberFrom(process.env.CODEXPRO_MAX_HTTP_SESSIONS, 64, 1, 512),
     httpSessionTtlMs: numberFrom(process.env.CODEXPRO_HTTP_SESSION_TTL_MS, 30 * 60_000, 60_000, 24 * 60 * 60_000),
     blockedGlobs: [...DEFAULT_BLOCKED_GLOBS, ...extraBlockedGlobs],
-    contextDir: contextDirFrom(process.env.CODEXPRO_CONTEXT_DIR)
+    contextDir: contextDirFrom(process.env.CODEXPRO_CONTEXT_DIR),
+    toolCards: boolFrom(toolCardsArg ?? process.env.CODEXPRO_TOOL_CARDS, false)
   };
 }

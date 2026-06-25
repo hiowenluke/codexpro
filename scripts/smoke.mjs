@@ -154,6 +154,10 @@ function hasWidgetMeta(name) {
   const meta = toolsByName.get(name)?._meta ?? {};
   return meta.ui?.resourceUri === toolCardUri && meta['openai/outputTemplate'] === toolCardUri;
 }
+function hasToolCardStatusMeta(name) {
+  const meta = toolsByName.get(name)?._meta ?? {};
+  return Boolean(meta['openai/toolInvocation/invoking'] || meta['openai/toolInvocation/invoked']);
+}
 async function expectToolError(name, args, pattern, targetClient = client) {
   const result = await targetClient.request('tools/call', { name, arguments: args });
   if (!result.isError) {
@@ -165,8 +169,24 @@ async function expectToolError(name, args, pattern, targetClient = client) {
   }
 }
 for (const visualTool of toolNames) {
-  if (!hasWidgetMeta(visualTool)) throw new Error(`${visualTool} should render the CodexPro widget`);
+  if (hasWidgetMeta(visualTool) || hasToolCardStatusMeta(visualTool)) throw new Error(`${visualTool} exposed widget metadata while CODEXPRO_TOOL_CARDS is off`);
 }
+const cardClient = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--bash', 'safe', '--tool-mode', 'full'], {
+  cwd: path.resolve('.'),
+  env: { ...process.env, CODEXPRO_ROOT: tmp, CODEXPRO_ALLOWED_ROOTS: tmp, CODEXPRO_TOOL_CARDS: '1' }
+});
+await cardClient.request('initialize', {
+  protocolVersion: '2024-11-05',
+  capabilities: {},
+  clientInfo: { name: 'codexpro-smoke-card-opt-in', version: '0.1.0' }
+});
+cardClient.notify('notifications/initialized');
+const cardTools = await cardClient.request('tools/list', {});
+const cardSearchMeta = cardTools.tools.find((tool) => tool.name === 'search')?._meta ?? {};
+if (cardSearchMeta.ui?.resourceUri !== toolCardUri || cardSearchMeta['openai/outputTemplate'] !== toolCardUri) {
+  throw new Error('CODEXPRO_TOOL_CARDS=1 did not opt search into widget metadata');
+}
+await cardClient.close();
 const resources = await client.request('resources/list', {});
 const toolCard = resources.resources.find((resource) => resource.uri === toolCardUri);
 if (!toolCard) throw new Error(`missing tool-card resource: ${toolCardUri}`);
