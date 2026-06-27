@@ -1229,7 +1229,18 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         includeHidden: parseBool(args.include_hidden, false),
         maxResults: limitInt(args.max_results, config.maxSearchResults, 1, config.maxSearchResults)
       });
-      return textResult(result.text, { workspace_id: workspace.id, root: workspace.root, ...result });
+      const structured: Record<string, unknown> = {
+        workspace_id: workspace.id,
+        root: workspace.root,
+        matches: result.matches,
+        truncated: result.truncated,
+        used: result.used
+      };
+      // The tool card widget renders search hits from structuredContent.text.
+      // When cards are disabled (the default), including it would only duplicate
+      // the human-readable content payload, so omit the large blob in that case.
+      if (config.toolCards) structured.text = result.text;
+      return textResult(result.text, structured);
     }
   );
 
