@@ -88,9 +88,12 @@ ChatGPT Web 可以看到：
 
 ChatGPT Web 可以操作：
   read    读取文件
+  read_image 读取工作区图片，作为图片内容发给 ChatGPT
+  read_images 批量读取多张图片，或读取指定文件夹里的图片
   search  搜索代码
   write   在工作区内写文件
   edit    精确替换文本
+  move    在工作区内移动/重命名文件，不需要 shell mv
   bash    运行安全验证命令
   show_changes 查看当前改动摘要
 
@@ -352,7 +355,7 @@ CodexPro 是本地开发桥，不是操作系统级沙箱。
 - 写入限制在配置的工作区 root 内。
 - 常见敏感路径会被拒绝：`.env`、私钥、`.git`、`node_modules`、生成目录、缓存目录。
 - symlink 逃逸会被阻止。
-- safe bash 只允许常见检查、搜索、git、lint、test、typecheck、build 等命令。
+- safe bash 只允许常见检查、搜索、受限 git add/commit、lint、test、typecheck、build 等命令。
 - `codexpro start --no-bash` 会完全关闭 ChatGPT 可调用的 bash 工具。
 - `execute-handoff` 和 `watch-handoff` 是本地 CLI 命令，不是远程 MCP 工具。
 

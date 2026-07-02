@@ -492,6 +492,8 @@ async function runSupertoolModeStress(root) {
 
     const actions = await client.request('tools/call', { name: 'codexpro', arguments: { action: 'list_actions' } });
     assert(actions.structuredContent.actions.includes('read'), 'minimal supertool actions missing read');
+    assert(actions.structuredContent.actions.includes('read_image'), 'minimal supertool actions missing read_image');
+    assert(actions.structuredContent.actions.includes('read_images'), 'minimal supertool actions missing read_images');
     assert(!actions.structuredContent.actions.includes('bash'), 'minimal no-bash supertool actions exposed bash');
     assert(!actions.structuredContent.actions.includes('search'), 'minimal supertool actions exposed search');
 
@@ -693,10 +695,10 @@ async function runMinimalHandoffStress(root) {
     const tools = await client.request('tools/list', {});
     const names = tools.tools.map((tool) => tool.name);
     assert(names.includes('handoff_to_agent'), 'minimal handoff mode missing handoff_to_agent');
-    assert(!names.includes('write') && !names.includes('edit'), 'minimal handoff mode exposed write/edit');
+    assert(!names.includes('write') && !names.includes('edit') && !names.includes('move'), 'minimal handoff mode exposed write/edit/move');
     const actions = await client.request('tools/call', { name: 'codexpro', arguments: { action: 'list_actions' } });
     assert(actions.structuredContent.actions.includes('handoff_to_agent'), 'minimal handoff supertool actions missing handoff_to_agent');
-    assert(!actions.structuredContent.actions.includes('write') && !actions.structuredContent.actions.includes('edit'), 'minimal handoff supertool actions exposed write/edit');
+    assert(!actions.structuredContent.actions.includes('write') && !actions.structuredContent.actions.includes('edit') && !actions.structuredContent.actions.includes('move'), 'minimal handoff supertool actions exposed write/edit/move');
     const handoff = await client.request('tools/call', {
       name: 'codexpro',
       arguments: { action: 'agent_handoff', args: { title: 'Stress Plan', plan: '- keep it narrow' } }

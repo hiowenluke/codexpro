@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { CodexProConfig } from "./config.js";
 import { WorkspaceManager, PathGuard, CodexProError, type Workspace } from "./guard.js";
-import { repoTree, readTextFile, writeTextFile, editTextFile, ensureAiBridge } from "./fsOps.js";
+import { repoTree, readTextFile, readImageFile, readImageFiles, writeTextFile, editTextFile, moveFile, ensureAiBridge } from "./fsOps.js";
 import { searchWorkspace } from "./searchOps.js";
 import { runBash } from "./bashOps.js";
 import { gitDiff, gitLog, gitStatus } from "./gitOps.js";
@@ -23,6 +23,28 @@ function errorText(error: unknown): string {
 function textResult(text: string, structuredContent: Record<string, unknown> = {}, meta: Record<string, unknown> = {}): any {
   return {
     content: [{ type: "text", text: redactSensitiveText(text) }],
+    structuredContent: redactStructured(structuredContent),
+    _meta: meta
+  };
+}
+
+function imageResult(text: string, image: { data: string; mimeType: string }, structuredContent: Record<string, unknown> = {}, meta: Record<string, unknown> = {}): any {
+  return {
+    content: [
+      { type: "text", text: redactSensitiveText(text) },
+      { type: "image", data: image.data, mimeType: image.mimeType }
+    ],
+    structuredContent: redactStructured(structuredContent),
+    _meta: meta
+  };
+}
+
+function imagesResult(text: string, images: { data: string; mimeType: string }[], structuredContent: Record<string, unknown> = {}, meta: Record<string, unknown> = {}): any {
+  return {
+    content: [
+      { type: "text", text: redactSensitiveText(text) },
+      ...images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }))
+    ],
     structuredContent: redactStructured(structuredContent),
     _meta: meta
   };
@@ -186,6 +208,15 @@ const SUPERTOOL_ACTION_ALIASES: Record<string, string> = {
   open: "open_current_workspace",
   snapshot: "workspace_snapshot",
   changes: "show_changes",
+  image: "read_image",
+  images: "read_images",
+  open_image: "read_image",
+  open_images: "read_images",
+  view_image: "read_image",
+  view_images: "read_images",
+  move_file: "move",
+  rename: "move",
+  mv: "move",
   handoff_poll: "wait_for_handoff",
   pro_export: "export_pro_context",
   agent_handoff: "handoff_to_agent",
@@ -224,10 +255,10 @@ function assertWriteToolAllowed(config: CodexProConfig, relPath: string): void {
   if (config.writeMode === "handoff") {
     throw new CodexProError(
       `Source writes are disabled because CODEXPRO_WRITE_MODE=handoff. ` +
-        `Use handoff_to_agent or handoff_to_codex, or write/edit only inside ${config.contextDir}/.`
+        `Use handoff_to_agent or handoff_to_codex, or write/edit/move only inside ${config.contextDir}/.`
     );
   }
-  throw new CodexProError("write/edit tools are disabled because CODEXPRO_WRITE_MODE=off. handoff_to_agent and handoff_to_codex are still available for planning.");
+  throw new CodexProError("write/edit/move tools are disabled because CODEXPRO_WRITE_MODE=off. handoff_to_agent and handoff_to_codex are still available for planning.");
 }
 
 function registerToolCompat(
@@ -280,8 +311,11 @@ const MINIMAL_TOOL_NAMES = [
   "open_current_workspace",
   "open_workspace",
   "read",
+  "read_image",
+  "read_images",
   "write",
   "edit",
+  "move",
   "bash",
   "show_changes"
 ] as const;
@@ -310,8 +344,11 @@ const FULL_TOOL_NAMES = [
   "tree",
   "search",
   "read",
+  "read_image",
+  "read_images",
   "write",
   "edit",
+  "move",
   "bash",
   "git_status",
   "git_diff",
@@ -343,7 +380,7 @@ function toolNamesForMode(config: CodexProConfig): string[] {
     if (bashIndex !== -1) names.splice(bashIndex, 1);
   }
   if (config.writeMode !== "workspace") {
-    for (const writeTool of ["write", "edit"]) {
+    for (const writeTool of ["write", "edit", "move"]) {
       const toolIndex = names.indexOf(writeTool);
       if (toolIndex !== -1) names.splice(toolIndex, 1);
     }
@@ -372,7 +409,7 @@ function registeredToolNames(server: McpServer): string[] {
 
 function shouldRegisterTool(config: CodexProConfig, name: string): boolean {
   if (name === "bash" && config.bashMode === "off") return false;
-  if ((name === "write" || name === "edit") && config.writeMode !== "workspace") return false;
+  if ((name === "write" || name === "edit" || name === "move") && config.writeMode !== "workspace") return false;
   if (name === "codex_sessions") return config.codexSessions !== "off";
   if (name === "read_codex_session") return config.codexSessions === "read";
   if (name === "handoff_to_agent" && config.writeMode === "handoff") return true;
@@ -398,14 +435,14 @@ function registerCodexTool(
 function serverInstructions(config: CodexProConfig): string {
   const editInstruction =
     config.writeMode === "workspace"
-      ? "4. Edit source files with write/edit. After edits, call show_changes once for git status, diff stats, and review diff."
+      ? "4. Edit source files with write/edit/move. After edits, call show_changes once for git status, diff stats, and review diff."
       : config.writeMode === "handoff"
-        ? "4. Source writes are disabled and generic write/edit tools are unavailable. Use handoff_to_agent/handoff_to_codex for plans."
-        : "4. Write/edit tools are disabled. Do not attempt direct file writes; use handoff or context export workflows instead.";
+        ? "4. Source writes are disabled and generic write/edit/move tools are unavailable. Use handoff_to_agent/handoff_to_codex for plans."
+        : "4. Write/edit/move tools are disabled. Do not attempt direct file writes; use handoff or context export workflows instead.";
   const bashInstruction =
     config.bashMode === "off"
       ? "5. Bash is disabled and the bash tool is unavailable. Do not attempt shell commands."
-      : "5. Use bash only for meaningful verification commands such as npm test, npm run build, lint, typecheck, or an existing project script.";
+      : "5. Use bash only for meaningful verification or local git staging/commit commands such as npm test, npm run build, lint, typecheck, git add, git commit -m, or an existing project script.";
 
   return [
     "CodexPro connects ChatGPT to one local development workspace.",
@@ -413,7 +450,7 @@ function serverInstructions(config: CodexProConfig): string {
     "Preferred workflow:",
     "1. Start with open_current_workspace. Use open_workspace only when the user gives a different root or asks to switch folders.",
     "2. Follow any AGENTS.md-style instructions returned by the workspace open call before editing files.",
-    "3. Inspect with tree, search, and read. Do not use bash for git status, git diff, cat, sed, grep, rg, find, ls, or file reading.",
+    "3. Inspect with tree, search, read, read_image, and read_images. Use read_images when the user asks to inspect, compare, or summarize multiple local images or all images in a folder. Do not use bash for git status, git diff, cat, sed, grep, rg, find, ls, or file reading.",
     editInstruction,
     bashInstruction,
     "6. Keep tool calls minimal. Prefer one targeted search plus show_changes instead of repeated broad inspection calls.",
@@ -811,6 +848,8 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         inheritEnv: config.inheritEnv,
         contextDir: config.contextDir,
         maxReadBytes: config.maxReadBytes,
+        maxImageBytes: config.maxImageBytes,
+        maxImageBatchBytes: config.maxImageBatchBytes,
         maxWriteBytes: config.maxWriteBytes,
         maxOutputBytes: config.maxOutputBytes,
         maxSearchResults: config.maxSearchResults,
@@ -1437,6 +1476,122 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
   registerCodexTool(
     config,
     server,
+    "read_image",
+    {
+      title: "Read Image",
+      description:
+        "Read one local workspace image and return it as MCP image content for visual inspection. Supports PNG, JPEG, GIF, and WebP. Use read for text files.",
+      inputSchema: {
+        workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use default workspace."),
+        path: z.string().describe("Image file path relative to workspace root."),
+        max_bytes: z.number().int().min(1000).max(20000000).optional().describe("Maximum image bytes. Capped by server config.")
+      },
+      annotations: READ_ONLY_ANNOTATIONS,
+      _meta: {
+        "openai/toolInvocation/invoking": "Reading image...",
+        "openai/toolInvocation/invoked": "Image read"
+      }
+    },
+    async (args) => {
+      const workspace = workspaces.getWorkspace(args.workspace_id);
+      const result = await readImageFile(config, guard, workspace, args.path, {
+        maxBytes: args.max_bytes
+      });
+      const text = `# Read Image\n\nPath: ${result.path}\nMIME: ${result.mimeType}\nBytes: ${result.bytes}\nSHA-256: ${result.sha256}\n\nThe image is attached as MCP image content.`;
+      return imageResult(
+        text,
+        { data: result.data, mimeType: result.mimeType },
+        {
+          workspace_id: workspace.id,
+          root: workspace.root,
+          path: result.path,
+          mimeType: result.mimeType,
+          bytes: result.bytes,
+          sha256: result.sha256
+        }
+      );
+    }
+  );
+
+  registerCodexTool(
+    config,
+    server,
+    "read_images",
+    {
+      title: "Read Images",
+      description:
+        "Read multiple local workspace images as MCP image content. Use this when the user asks to inspect, compare, or summarize several local images, or all images in a specified folder. Provide paths, directory, or both. Directory scans are sorted, non-recursive by default, and capped by max_images and max_total_bytes.",
+      inputSchema: {
+        workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use default workspace."),
+        paths: z.array(z.string()).max(50).optional().describe("Optional explicit image paths relative to workspace root."),
+        directory: z.string().optional().describe("Optional directory relative to workspace root. Supported image files in it will be read in sorted order."),
+        recursive: z.boolean().optional().describe("Scan subdirectories when directory is provided. Default: false."),
+        include_hidden: z.boolean().optional().describe("Include hidden image files/directories that are not blocked. Default: false."),
+        max_images: z.number().int().min(1).max(50).optional().describe("Maximum images to return. Default: 10."),
+        max_bytes_per_image: z.number().int().min(1000).max(20000000).optional().describe("Maximum bytes per image. Capped by server config."),
+        max_total_bytes: z.number().int().min(1000).max(100000000).optional().describe("Maximum total bytes across images. Capped by server config.")
+      },
+      annotations: READ_ONLY_ANNOTATIONS,
+      _meta: {
+        "openai/toolInvocation/invoking": "Reading images...",
+        "openai/toolInvocation/invoked": "Images read"
+      }
+    },
+    async (args) => {
+      const workspace = workspaces.getWorkspace(args.workspace_id);
+      const maxImages = limitInt(args.max_images, 10, 1, 50);
+      const maxTotalBytes = limitInt(args.max_total_bytes, config.maxImageBatchBytes, 1_000, config.maxImageBatchBytes);
+      const result = await readImageFiles(config, guard, workspace, {
+        paths: Array.isArray(args.paths) ? args.paths.map(String) : undefined,
+        directory: args.directory,
+        recursive: parseBool(args.recursive, false),
+        includeHidden: parseBool(args.include_hidden, false),
+        maxImages,
+        maxBytesPerImage: args.max_bytes_per_image,
+        maxTotalBytes
+      });
+      const imageMeta = result.images.map((image, index) => ({
+        index: index + 1,
+        path: image.path,
+        mimeType: image.mimeType,
+        bytes: image.bytes,
+        sha256: image.sha256
+      }));
+      const lines = [
+        "# Read Images",
+        "",
+        `Images: ${result.imageCount}`,
+        `Total bytes: ${result.totalBytes}`,
+        `Candidates: ${result.candidateCount}`,
+        `Truncated: ${result.truncated}`,
+        "",
+        ...imageMeta.map((image) => `${image.index}. ${image.path} (${image.mimeType}, ${image.bytes} bytes)`),
+        ...(result.skipped.length ? ["", "Skipped:", ...result.skipped.map((item) => `- ${item}`)] : []),
+        "",
+        "Images are attached as MCP image content in the same order."
+      ];
+      return imagesResult(
+        lines.join("\n"),
+        result.images.map((image) => ({ data: image.data, mimeType: image.mimeType })),
+        {
+          workspace_id: workspace.id,
+          root: workspace.root,
+          images: imageMeta,
+          image_count: result.imageCount,
+          total_bytes: result.totalBytes,
+          candidate_count: result.candidateCount,
+          truncated: result.truncated,
+          skipped: result.skipped,
+          max_images: maxImages,
+          max_total_bytes: maxTotalBytes
+        }
+      );
+    }
+  );
+
+  registerCodexTool(
+    config,
+    server,
     "write",
     {
       title: "Write File",
@@ -1526,11 +1681,63 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
   registerCodexTool(
     config,
     server,
+    "move",
+    {
+      title: "Move File",
+      description:
+        "Move or rename one file inside the workspace without using shell mv. Refuses symlinks, directories, blocked paths, path escapes, and existing destinations.",
+      inputSchema: {
+        workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use default workspace."),
+        from_path: z.string().describe("Existing file path relative to workspace root."),
+        to_path: z.string().describe("New file path relative to workspace root. Must not already exist."),
+        create_dirs: z.boolean().optional().describe("Create destination parent directories if missing. Default: true.")
+      },
+      annotations: LOCAL_WRITE_ANNOTATIONS,
+      _meta: {
+        ...toolCardMeta(),
+        "openai/toolInvocation/invoking": "Moving file...",
+        "openai/toolInvocation/invoked": "File moved"
+      }
+    },
+    async (args) => {
+      const workspace = workspaces.getWorkspace(args.workspace_id);
+      const fromResolved = guard.resolve(workspace, args.from_path);
+      const toResolved = guard.resolve(workspace, args.to_path, { forWrite: true });
+      assertWriteToolAllowed(config, fromResolved.relPath);
+      assertWriteToolAllowed(config, toResolved.relPath);
+      const result = await moveFile(guard, workspace, args.from_path, args.to_path, {
+        createDirs: args.create_dirs !== false
+      });
+      const text = [
+        "# Move File",
+        "",
+        `From: ${result.oldPath}`,
+        `To: ${result.newPath}`,
+        `Bytes: ${result.bytes}`,
+        "",
+        "Destination overwrites are refused. Use show_changes to review the resulting git rename/change."
+      ].join("\n");
+      return textResult(text, {
+        workspace_id: workspace.id,
+        root: workspace.root,
+        old_path: result.oldPath,
+        new_path: result.newPath,
+        path: result.newPath,
+        bytes: result.bytes,
+        moved: result.moved,
+        changed: result.moved
+      });
+    }
+  );
+
+  registerCodexTool(
+    config,
+    server,
     "bash",
     {
       title: "Bash",
       description:
-        "Run one allowlisted verification command in the workspace, such as tests, build, lint, typecheck, or a project script. Do not use for git status/diff or file inspection; use show_changes, tree, search, and read instead. Do not chain commands with &&, pipes, redirects, or shell file readers.",
+        "Run one allowlisted verification or local git staging/commit command in the workspace, such as tests, build, lint, typecheck, git add, git commit -m, or a project script. Do not use for git status/diff or file inspection; use show_changes, tree, search, and read instead. Do not chain commands with &&, pipes, redirects, or shell file readers.",
       inputSchema: {
         workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use default workspace."),
         command: z.string().describe("Command to run."),

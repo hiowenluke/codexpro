@@ -107,7 +107,7 @@ The high-level shape can look similar because both use a local MCP bridge, a tun
 | CodexPro focuses on | Why it matters |
 | --- | --- |
 | ChatGPT-first coding loop | The first-run path is install, setup in a repo, paste one Server URL, then let ChatGPT inspect, edit, verify, and review that workspace. |
-| Explicit safety modes | Bash, write/edit, tool catalog size, Codex session reads, and handoff execution are separate controls instead of one broad remote-control switch. |
+| Explicit safety modes | Bash, write/edit/move, tool catalog size, Codex session reads, and handoff execution are separate controls instead of one broad remote-control switch. |
 | Repo-backed continuity | `AGENTS.md` and `.ai-bridge/*` keep durable project context in the repo, not hidden in a chat transcript or one machine-local UI state. |
 | Reviewable outputs | Tool cards, diffs, `show_changes`, smoke tests, and handoff status files are designed so users can see what changed before trusting it. |
 | TOS-safe product boundary | CodexPro does not proxy models, pool accounts, scrape third-party Pro sites, bypass quotas, or pretend to be an OS sandbox. |
@@ -186,8 +186,11 @@ Standard mode exposes:
 - `search` — search code; literal search falls back to Node when ripgrep is unavailable, while regex search requires ripgrep.
 - `load_skill` — load bounded `SKILL.md` instructions for a discovered workspace, user, or plugin skill by name, with optional source/path disambiguation.
 - `read` — read text files with line numbers.
+- `read_image` — read a local workspace image as MCP image content. Supports PNG, JPEG, GIF, and WebP, capped by `CODEXPRO_MAX_IMAGE_BYTES`.
+- `read_images` — read multiple local workspace images, or supported images in a specified folder, as MCP image content. Default cap: 10 images and `CODEXPRO_MAX_IMAGE_BATCH_BYTES`.
 - `write` — create/overwrite files and return a diff. Advertised only when `CODEXPRO_WRITE_MODE=workspace`.
 - `edit` — exact text replacement and return a diff. Advertised only when `CODEXPRO_WRITE_MODE=workspace`.
+- `move` — move/rename one workspace file without shell `mv`. Advertised only when `CODEXPRO_WRITE_MODE=workspace`.
 - `bash` — run allowlisted shell commands in the workspace. Hidden when `CODEXPRO_BASH_MODE=off`.
 - `show_changes` — one review-oriented summary with git status, diff stats, and optional diff.
 - `read_handoff` — read `.ai-bridge` files.
@@ -202,7 +205,7 @@ codexpro
 server_config
 codexpro_self_test
 open_current_workspace / open_workspace
-read / write / edit
+read / read_image / read_images / write / edit / move
 bash
 show_changes
 ```
@@ -569,7 +572,7 @@ Advanced controls such as `u` for printing the full URL, `p` for Create App fiel
 Startup modes:
 
 ```bash
-codexpro start                 # normal coding mode: read/write/edit/search/bash
+codexpro start                 # normal coding mode: read/read_image/read_images/write/edit/move/search/bash
 codexpro start --no-bash       # normal coding mode without ChatGPT-triggered shell commands
 codexpro start --bash-transcript full  # print raw stdout/stderr in chat instead of compact cards
 codexpro start --bash-session main --require-bash-session
@@ -1113,9 +1116,9 @@ Example MCP config:
 `CODEXPRO_WRITE_MODE=workspace` is the default normal coding mode. Use `handoff` when you want planning-only behavior and do not want ChatGPT to edit source files directly.
 
 ```text
-off        write/edit tools are disabled and not advertised; handoff_to_agent and handoff_to_codex still write .ai-bridge/current-plan.md
-handoff    generic write/edit tools are disabled and not advertised; handoff tools write only bounded .ai-bridge plan/context files
-workspace  write/edit can write workspace files, except blocked paths
+off        write/edit/move tools are disabled and not advertised; handoff_to_agent and handoff_to_codex still write .ai-bridge/current-plan.md
+handoff    generic write/edit/move tools are disabled and not advertised; handoff tools write only bounded .ai-bridge plan/context files
+workspace  write/edit/move can change workspace files, except blocked paths
 ```
 
 The launcher defaults to `workspace` in normal coding mode and `handoff` in handoff/pro planning modes.
@@ -1127,8 +1130,8 @@ The launcher defaults to `workspace` in normal coding mode and `handoff` in hand
 `CODEXPRO_TOOL_MODE=standard` is the default. It exposes the normal coding loop plus `show_changes`, Pro context export, and generic agent handoff.
 
 ```text
-minimal   codexpro supertool plus config/self-test/open/read/write/edit/bash/show_changes, with write/bash removed when disabled
-standard  default surface for normal coding plus handoff/export, with write/edit only in workspace write mode
+minimal   codexpro supertool plus config/self-test/open/read/read_image/read_images/write/edit/move/bash/show_changes, with write/bash removed when disabled
+standard  default surface for normal coding plus handoff/export, with write/edit/move only in workspace write mode
 full      all tools, including inventory, workspace snapshots, raw git tools, codex_context, and compatibility wrappers
 ```
 
@@ -1146,13 +1149,29 @@ codexpro start --tool-mode full
 ```text
 pwd, ls, find
 git status, git diff, git log, git show, git branch, git rev-parse, git ls-files
+git add, non-interactive git commit -m / --message
 npm/pnpm/yarn/bun test/build/lint/typecheck/check, including suffix scripts such as npm run build:clients
 pytest, go test, cargo test, cargo check, cargo clippy, tsc, eslint, biome check
 ```
 
-Use the MCP `read` and `search` tools for file contents. The safe shell blocks obvious destructive commands, redirects, pipes, `curl`, `wget`, `ssh`, `docker`, `git push/reset/clean/checkout/switch/restore`, `find -exec`, `find -delete`, and file-content shell readers such as `cat`, `grep`, `rg`, `head`, and `tail`.
+Use the MCP `read` and `search` tools for file contents. The safe shell blocks obvious destructive commands, redirects, pipes, `curl`, `wget`, `ssh`, `docker`, `git push/reset/clean/checkout/switch/restore`, `git commit --amend`, `find -exec`, `find -delete`, and file-content shell readers such as `cat`, `grep`, `rg`, `head`, and `tail`.
+
+Safe `git commit` support is intended for normal non-interactive commits after review. It may still run repository git hooks, so use `--no-bash` for untrusted repos.
 
 Package-manager scripts such as `npm run build` execute code from the repo. Use `--no-bash` for untrusted repos.
+
+## Image reads
+
+The normal `read` tool intentionally rejects binary files. Use `read_image` for one local image, and `read_images` for multiple images or a folder of images. These tools return selected image bytes to the MCP client as image content, so images are shared with ChatGPT/OpenAI for that tool call just like a manual chat upload would be.
+
+`read_images` accepts explicit `paths`, a `directory`, or both. Directory scans are sorted, non-recursive by default, and skip hidden files unless `include_hidden=true`. `recursive=true` scans subdirectories. The default batch cap is 10 images and 20 MB; `max_images` can be raised to 50 per call.
+
+`read_image` and `read_images` support PNG, JPEG, GIF, and WebP inside the allowed workspace roots. They still reject blocked paths, path escapes, oversized files, and unsupported formats. The default per-image cap is 4 MB:
+
+```bash
+CODEXPRO_MAX_IMAGE_BYTES=4000000
+CODEXPRO_MAX_IMAGE_BATCH_BYTES=20000000
+```
 
 `CODEXPRO_BASH_MODE=off` disables bash completely and removes the `bash` MCP tool from the advertised tool list. `codexpro start --no-bash` is the CLI shortcut for the same setting.
 
@@ -1242,7 +1261,7 @@ Call server_config first, then codexpro_self_test.
 If self-test fails, stop and report the failed checks.
 Then call open_current_workspace with include_tree=false.
 
-Act as a coding agent. Inspect the relevant files, make the requested source edits with write/edit, then verify with search/read/bash and show_changes when useful. Use bash only for focused verification commands such as build, test, lint, or typecheck.
+Act as a coding agent. Inspect the relevant files, make the requested source edits with write/edit/move, then verify with search/read/bash and show_changes when useful. Use bash only for focused verification commands such as build, test, lint, or typecheck.
 
 Keep changes scoped to the request. Do not use handoff_to_agent unless I explicitly ask for planning-only handoff.
 ```

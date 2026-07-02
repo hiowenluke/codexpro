@@ -9,7 +9,15 @@ import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const launcherPath = fileURLToPath(import.meta.url);
+const projectRoot = path.resolve(path.dirname(launcherPath), '..');
+const projectRootReal = (() => {
+  try {
+    return fs.realpathSync(projectRoot);
+  } catch {
+    return projectRoot;
+  }
+})();
 const UNTRACKED_FILE_HASH_BYTES = 64 * 1024;
 const UNTRACKED_SYMLINK_TARGET_BYTES = 512;
 
@@ -50,7 +58,7 @@ Options:
   --allow-home              Allow opening any workspace under your home directory.
   --mode <agent|handoff|pro>
                              Default: agent.
-                             agent = ChatGPT can read, write/edit files, search, and run safe bash.
+                             agent = ChatGPT can read text/images/folders of images, write/edit/move files, search, and run safe bash.
                              handoff = ChatGPT writes .ai-bridge plans for a local implementation agent.
                              pro = export context for models that cannot call MCP tools.
   --agent                   Shortcut for --mode agent.
@@ -72,10 +80,10 @@ Options:
   --codex-dir <dir>          Codex config/session directory. Default: ~/.codex.
   --write <off|handoff|workspace>
                              Write mode. Default: workspace in agent mode, handoff otherwise.
-                             handoff = no generic write/edit tools; handoff tools write bounded .ai-bridge files.
+                             handoff = no generic write/edit/move tools; handoff tools write bounded .ai-bridge files.
   --tool-mode <minimal|standard|full>
                              Tool surface exposed to ChatGPT. Default: standard.
-                             minimal = config/self-test plus open/read/write/edit/bash/show_changes.
+                             minimal = config/self-test plus open/read/read_image/read_images/write/edit/move/bash/show_changes.
                              full = expose every compatibility and advanced tool.
   --widget-domain <origin>   Dedicated HTTPS origin for ChatGPT widget iframes.
                              Required for app submission. Default: https://rebel0789.github.io.
@@ -2411,6 +2419,7 @@ function printConnectorBlock(endpoint, token, options = {}) {
   console.log('');
   console.log(paint('bold', 'CodexPro ready'));
   if (options.root) console.log(`  Workspace  ${options.root}`);
+  console.log(`  CodexPro   ${projectRootReal}`);
   console.log(`  Mode       ${modeTitle}  tools=${options.toolMode ?? 'standard'}  write=${options.write ?? 'workspace'}  bash=${options.bash ?? 'safe'}`);
   console.log(`  Transcript bash=${options.bashTranscript ?? 'compact'}`);
   if (options.codexSessions && options.codexSessions !== 'off') console.log(`  Codex      sessions=${options.codexSessions}`);
@@ -2453,7 +2462,7 @@ function printControlHelp() {
 function printModeHelp() {
   console.log('');
   console.log('Modes');
-  console.log('  codexpro start                 agent mode: read/write/edit/search/bash');
+  console.log('  codexpro start                 agent mode: read/read_image/read_images/write/edit/move/search/bash');
   console.log('  codexpro start --no-bash       agent mode without ChatGPT-triggered shell commands');
   console.log('  codexpro start --bash-session main --require-bash-session');
   console.log('  codexpro start --mode handoff  planning-only .ai-bridge handoff');
@@ -3466,6 +3475,8 @@ async function main() {
   await assertPortAvailable(host, port);
 
   printBox('CodexPro start', [
+    labelValue('CodexPro', projectRootReal),
+    ...(projectRootReal !== projectRoot ? [labelValue('Package link', projectRoot)] : []),
     labelValue('Workspace', root),
     labelValue('Mode', `${mode}  tools=${toolMode}  write=${write}  bash=${bash}`),
     labelValue('Bash transcript', bashTranscript),

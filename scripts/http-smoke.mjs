@@ -436,12 +436,12 @@ try {
 
   const queryTools = await listTools(`${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`);
   const queryToolNames = toolNames(queryTools);
-  for (const expected of ['server_config', 'codexpro_self_test', 'codexpro_inventory', 'open_current_workspace', 'open_workspace', 'workspace_snapshot', 'tree', 'search', 'load_skill', 'git_status', 'git_diff', 'show_changes', 'read_handoff', 'wait_for_handoff', 'codex_context', 'handoff_to_agent', 'handoff_to_codex', 'export_pro_context']) {
+  for (const expected of ['server_config', 'codexpro_self_test', 'codexpro_inventory', 'open_current_workspace', 'open_workspace', 'workspace_snapshot', 'tree', 'search', 'load_skill', 'read_image', 'read_images', 'git_status', 'git_diff', 'show_changes', 'read_handoff', 'wait_for_handoff', 'codex_context', 'handoff_to_agent', 'handoff_to_codex', 'export_pro_context']) {
     if (!queryToolNames.includes(expected)) {
       throw new Error(`URL-token MCP tools/list missing ${expected}; got ${queryToolNames.join(', ')}`);
     }
   }
-  for (const hidden of ['write', 'edit']) {
+  for (const hidden of ['write', 'edit', 'move']) {
     if (queryToolNames.includes(hidden)) {
       throw new Error(`HTTP handoff mode should not advertise ${hidden}; got ${queryToolNames.join(', ')}`);
     }
@@ -639,7 +639,7 @@ try {
   const disabledBase = `http://127.0.0.1:${disabledPort}`;
   const disabledTools = await listTools(`${disabledBase}/mcp?codexpro_token=${encodeURIComponent(disabledToken)}`);
   const disabledToolNames = toolNames(disabledTools);
-  for (const hiddenTool of ['bash', 'write', 'edit']) {
+  for (const hiddenTool of ['bash', 'write', 'edit', 'move']) {
     if (disabledToolNames.includes(hiddenTool)) {
       throw new Error(`HTTP disabled mode should not advertise ${hiddenTool}; got ${disabledToolNames.join(', ')}`);
     }

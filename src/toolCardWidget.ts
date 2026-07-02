@@ -459,6 +459,7 @@ export const toolCardWidgetHtml = String.raw`
       tree: "File tree",
       write: "File write",
       edit: "Exact edit",
+      move: "File move",
       git_status: "Git Status",
       git_diff: "Git Diff",
       show_changes: "Change review",
@@ -485,6 +486,7 @@ export const toolCardWidgetHtml = String.raw`
     if (tool === "tree") return "T";
     if (tool === "write") return "W";
     if (tool === "edit") return "E";
+    if (tool === "move") return "M";
     if (tool === "git_status" || tool === "git_diff") return "G";
     if (tool === "show_changes") return "D";
     if (tool === "read_handoff") return "H";
@@ -592,6 +594,18 @@ export const toolCardWidgetHtml = String.raw`
     return '<article class="card">' + header(data, pills) + '<div class="body">' +
       codebox(basename(data.path || data.plan_path || "file"), body, "") +
       '</div></article>';
+  }
+
+  function renderMove(data) {
+    const pills = [
+      data.moved ? pill("moved", "good") : "",
+      data.bytes !== undefined ? pill(data.bytes + " bytes") : ""
+    ].join("");
+    const rows = [
+      '<div class="file-row"><span class="file-code">from</span><span class="file-name">' + esc(data.old_path || "-") + '</span></div>',
+      '<div class="file-row"><span class="file-code">to</span><span class="file-name">' + esc(data.new_path || data.path || "-") + '</span></div>'
+    ].join("");
+    return '<article class="card">' + header(data, pills) + '<div class="body"><div class="file-list">' + rows + '</div></div></article>';
   }
 
   function renderChanges(data) {
@@ -919,6 +933,8 @@ export const toolCardWidgetHtml = String.raw`
       root.innerHTML = renderChanges(data);
     } else if (tool === "handoff_to_agent" || tool === "handoff_to_codex") {
       root.innerHTML = renderHandoff(data);
+    } else if (tool === "move") {
+      root.innerHTML = renderMove(data);
     } else if (tool === "write" || tool === "edit" || tool === "git_diff" || tool === "export_pro_context" || tool === "read") {
       root.innerHTML = renderFile(data);
     } else if (tool === "bash") {

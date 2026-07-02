@@ -78,6 +78,12 @@ assertCommand(['dist/http.js', '--help'], 'CodexPro MCP HTTP server');
 
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'codexpro-smoke-'));
 await fs.writeFile(path.join(tmp, 'demo.txt'), 'alpha\nread\nread\nomega\n', 'utf8');
+const smokePngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+await fs.writeFile(path.join(tmp, 'pixel.png'), Buffer.from(smokePngBase64, 'base64'));
+await fs.mkdir(path.join(tmp, 'shots', 'nested'), { recursive: true });
+for (const rel of ['shots/01.png', 'shots/02.png', 'shots/nested/03.png']) {
+  await fs.writeFile(path.join(tmp, rel), Buffer.from(smokePngBase64, 'base64'));
+}
 await fs.writeFile(path.join(tmp, 'config.txt'), 'OPENAI_API_KEY=sk-realSecretValue123\n', 'utf8');
 await fs.writeFile(path.join(tmp, 'AGENTS.md'), '# Smoke Agents\n\n- Preserve demo.txt.\n', 'utf8');
 const codexHistoryDir = path.join(tmp, 'codex-history');
@@ -181,6 +187,12 @@ const commitResult = spawnSync('git', ['-c', 'user.email=smoke@example.com', '-c
 if (commitResult.status !== 0) {
   throw new Error(`git commit failed: ${commitResult.stderr || commitResult.stdout}`);
 }
+for (const args of [['config', 'user.email', 'smoke@example.com'], ['config', 'user.name', 'Smoke Test']]) {
+  const result = spawnSync('git', args, { cwd: tmp, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.stdout}`);
+  }
+}
 
 const client = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--bash', 'safe', '--tool-mode', 'full'], {
   cwd: path.resolve('.'),
@@ -195,7 +207,7 @@ await client.request('initialize', {
 client.notify('notifications/initialized');
 const tools = await client.request('tools/list', {});
 const toolNames = tools.tools.map((tool) => tool.name);
-for (const expected of ['server_config', 'codexpro_self_test', 'codexpro_inventory', 'list_workspaces', 'open_current_workspace', 'open_workspace', 'workspace_snapshot', 'tree', 'search', 'load_skill', 'read', 'write', 'edit', 'bash', 'git_status', 'git_diff', 'show_changes', 'read_handoff', 'wait_for_handoff', 'codex_context', 'handoff_to_agent', 'handoff_to_codex', 'export_pro_context']) {
+for (const expected of ['server_config', 'codexpro_self_test', 'codexpro_inventory', 'list_workspaces', 'open_current_workspace', 'open_workspace', 'workspace_snapshot', 'tree', 'search', 'load_skill', 'read', 'read_image', 'read_images', 'write', 'edit', 'move', 'bash', 'git_status', 'git_diff', 'show_changes', 'read_handoff', 'wait_for_handoff', 'codex_context', 'handoff_to_agent', 'handoff_to_codex', 'export_pro_context']) {
   if (!toolNames.includes(expected)) throw new Error(`missing tool: ${expected}`);
 }
 const toolCardUri = 'ui://widget/codexpro-tool-card-v9.html';
@@ -346,6 +358,28 @@ if (openedByPath.structuredContent.workspace_id !== ws) {
   throw new Error(`open_workspace path alias returned ${openedByPath.structuredContent.workspace_id}, expected ${ws}`);
 }
 await client.request('tools/call', { name: 'read', arguments: { workspace_id: ws, path: 'demo.txt' } });
+await expectToolError('read', { workspace_id: ws, path: 'pixel.png' }, /binary/i);
+const readImage = await client.request('tools/call', { name: 'read_image', arguments: { workspace_id: ws, path: 'pixel.png' } });
+const imagePart = readImage.content?.find?.((part) => part.type === 'image');
+if (!imagePart || imagePart.mimeType !== 'image/png' || imagePart.data !== smokePngBase64) {
+  throw new Error(`read_image did not return PNG image content: ${JSON.stringify(readImage)}`);
+}
+if (readImage.structuredContent.path !== 'pixel.png' || readImage.structuredContent.mimeType !== 'image/png' || readImage.structuredContent.bytes <= 0 || readImage.structuredContent.data) {
+  throw new Error(`read_image structured metadata was wrong or duplicated image data: ${JSON.stringify(readImage.structuredContent)}`);
+}
+await expectToolError('read_image', { workspace_id: ws, path: 'demo.txt' }, /Unsupported image type/);
+const readImages = await client.request('tools/call', { name: 'read_images', arguments: { workspace_id: ws, directory: 'shots', max_images: 5 } });
+const imageParts = readImages.content?.filter?.((part) => part.type === 'image') ?? [];
+if (imageParts.length !== 2 || readImages.structuredContent.image_count !== 2 || readImages.structuredContent.truncated !== false) {
+  throw new Error(`read_images did not read the non-recursive folder images: ${JSON.stringify(readImages.structuredContent)}`);
+}
+if (JSON.stringify(readImages.structuredContent.images?.map?.((image) => image.path)) !== JSON.stringify(['shots/01.png', 'shots/02.png'])) {
+  throw new Error(`read_images returned wrong folder ordering: ${JSON.stringify(readImages.structuredContent.images)}`);
+}
+const readImagesRecursive = await client.request('tools/call', { name: 'read_images', arguments: { workspace_id: ws, directory: 'shots', recursive: true, max_images: 2 } });
+if (readImagesRecursive.structuredContent.image_count !== 2 || readImagesRecursive.structuredContent.candidate_count !== 3 || readImagesRecursive.structuredContent.truncated !== true) {
+  throw new Error(`read_images did not report recursive max_images truncation: ${JSON.stringify(readImagesRecursive.structuredContent)}`);
+}
 await fs.writeFile(path.join(tmp, 'tokens.txt'), [
   'Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456',
   'https://example.test/mcp?codexpro_token=verysecretcodexprotoken123&x=1',
@@ -387,6 +421,29 @@ const envRefPayload = JSON.stringify(envRefRead);
 if (envRefPayload.includes('[REDACTED_SECRET]')) {
   throw new Error('env-var token references were incorrectly redacted as literal secrets');
 }
+await client.request('tools/call', {
+  name: 'write',
+  arguments: {
+    workspace_id: ws,
+    path: 'move-source.txt',
+    content: 'move me\n'
+  }
+});
+const moved = await client.request('tools/call', {
+  name: 'move',
+  arguments: {
+    workspace_id: ws,
+    from_path: 'move-source.txt',
+    to_path: 'nested/move-dest.txt'
+  }
+});
+if (moved.structuredContent.old_path !== 'move-source.txt' || moved.structuredContent.new_path !== 'nested/move-dest.txt') {
+  throw new Error(`move did not report old/new paths: ${JSON.stringify(moved.structuredContent)}`);
+}
+const movedRead = await client.request('tools/call', { name: 'read', arguments: { workspace_id: ws, path: 'nested/move-dest.txt' } });
+if (!JSON.stringify(movedRead).includes('move me')) throw new Error('move destination was not readable');
+await expectToolError('read', { workspace_id: ws, path: 'move-source.txt' }, /ENOENT|no such file/i);
+await expectToolError('move', { workspace_id: ws, from_path: 'nested/move-dest.txt', to_path: 'demo.txt' }, /Destination already exists/);
 const symlinkRead = await client.request('tools/call', { name: 'read', arguments: { workspace_id: ws, path: symlinkEscapePath } });
 if (!symlinkRead.isError) throw new Error('symlink escape read was not blocked');
 for (const linkPath of danglingSymlinks) {
@@ -431,6 +488,20 @@ await expectToolError('bash', { workspace_id: ws, command: 'find /tmp' }, /block
 await expectToolError('bash', { workspace_id: ws, command: 'find . -fprint leaked.txt' }, /blocked/i);
 await expectToolError('bash', { workspace_id: ws, command: 'git show HEAD:.env' }, /blocked/i);
 await expectToolError('bash', { workspace_id: ws, command: 'ls $HOME' }, /blocked/i);
+await expectToolError('bash', { workspace_id: ws, command: 'git commit' }, /allowlist/i);
+await expectToolError('bash', { workspace_id: ws, command: 'git commit --amend -m "blocked amend"' }, /blocked/i);
+const safeGitAdd = await client.request('tools/call', { name: 'bash', arguments: { workspace_id: ws, command: 'git add demo.txt' } });
+if (safeGitAdd.structuredContent.exitCode !== 0) {
+  throw new Error(`safe bash did not run git add: ${JSON.stringify(safeGitAdd.structuredContent)}`);
+}
+const safeGitCommit = await client.request('tools/call', { name: 'bash', arguments: { workspace_id: ws, command: 'git commit -m "safe bash commit"', timeout_ms: 60000 } });
+if (safeGitCommit.structuredContent.exitCode !== 0) {
+  throw new Error(`safe bash did not run git commit: ${JSON.stringify(safeGitCommit.structuredContent)}`);
+}
+const safeGitLog = await client.request('tools/call', { name: 'bash', arguments: { workspace_id: ws, command: 'git log --oneline -1' } });
+if (!safeGitLog.structuredContent.stdout?.includes('safe bash commit')) {
+  throw new Error(`safe bash git commit was not visible in git log: ${JSON.stringify(safeGitLog.structuredContent)}`);
+}
 const clientBuild = await client.request('tools/call', { name: 'bash', arguments: { workspace_id: ws, command: 'npm run build:clients', timeout_ms: 60000 } });
 if (!clientBuild.structuredContent.stdout?.includes('clients ok')) {
   throw new Error('safe bash did not run npm run build:clients');
@@ -626,8 +697,8 @@ async function assertToolMode(mode, expected, hidden) {
   modeClient.close();
 }
 
-await assertToolMode('', ['codexpro', 'server_config', 'codexpro_self_test', 'open_current_workspace', 'open_workspace', 'tree', 'search', 'load_skill', 'read', 'write', 'edit', 'bash', 'show_changes', 'read_handoff', 'wait_for_handoff', 'export_pro_context', 'handoff_to_agent'], ['codexpro_inventory', 'workspace_snapshot', 'git_status', 'git_diff', 'codex_context', 'handoff_to_codex']);
-await assertToolMode('minimal', ['codexpro', 'server_config', 'codexpro_self_test', 'open_current_workspace', 'open_workspace', 'read', 'write', 'edit', 'bash', 'show_changes'], ['tree', 'search', 'load_skill', 'read_handoff', 'wait_for_handoff', 'export_pro_context', 'handoff_to_agent', 'codex_context']);
+await assertToolMode('', ['codexpro', 'server_config', 'codexpro_self_test', 'open_current_workspace', 'open_workspace', 'tree', 'search', 'load_skill', 'read', 'read_image', 'read_images', 'write', 'edit', 'move', 'bash', 'show_changes', 'read_handoff', 'wait_for_handoff', 'export_pro_context', 'handoff_to_agent'], ['codexpro_inventory', 'workspace_snapshot', 'git_status', 'git_diff', 'codex_context', 'handoff_to_codex']);
+await assertToolMode('minimal', ['codexpro', 'server_config', 'codexpro_self_test', 'open_current_workspace', 'open_workspace', 'read', 'read_image', 'read_images', 'write', 'edit', 'move', 'bash', 'show_changes'], ['tree', 'search', 'load_skill', 'read_handoff', 'wait_for_handoff', 'export_pro_context', 'handoff_to_agent', 'codex_context']);
 
 const handoffWriteClient = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--write', 'handoff'], {
   cwd: path.resolve('.'),
@@ -641,14 +712,14 @@ await handoffWriteClient.request('initialize', {
 handoffWriteClient.notify('notifications/initialized');
 const handoffWriteTools = await handoffWriteClient.request('tools/list', {});
 const handoffWriteToolNames = handoffWriteTools.tools.map((tool) => tool.name);
-for (const hiddenWriteTool of ['write', 'edit']) {
+for (const hiddenWriteTool of ['write', 'edit', 'move']) {
   if (handoffWriteToolNames.includes(hiddenWriteTool)) {
     throw new Error(`--write handoff should not advertise ${hiddenWriteTool} tool; got ${handoffWriteToolNames.join(', ')}`);
   }
 }
 const handoffWriteConfig = await handoffWriteClient.request('tools/call', { name: 'server_config', arguments: {} });
-if (handoffWriteConfig.structuredContent.writeMode !== 'handoff' || handoffWriteConfig.structuredContent.registeredTools?.includes?.('write') || handoffWriteConfig.structuredContent.registeredTools?.includes?.('edit')) {
-  throw new Error(`server_config did not report write handoff with hidden edit tools: ${JSON.stringify(handoffWriteConfig.structuredContent)}`);
+if (handoffWriteConfig.structuredContent.writeMode !== 'handoff' || handoffWriteConfig.structuredContent.registeredTools?.includes?.('write') || handoffWriteConfig.structuredContent.registeredTools?.includes?.('edit') || handoffWriteConfig.structuredContent.registeredTools?.includes?.('move')) {
+  throw new Error(`server_config did not report write handoff with hidden write tools: ${JSON.stringify(handoffWriteConfig.structuredContent)}`);
 }
 handoffWriteClient.close();
 
@@ -685,7 +756,7 @@ await disabledWriteClient.request('initialize', {
 disabledWriteClient.notify('notifications/initialized');
 const disabledWriteTools = await disabledWriteClient.request('tools/list', {});
 const disabledWriteToolNames = disabledWriteTools.tools.map((tool) => tool.name);
-for (const hiddenWriteTool of ['write', 'edit']) {
+for (const hiddenWriteTool of ['write', 'edit', 'move']) {
   if (disabledWriteToolNames.includes(hiddenWriteTool)) {
     throw new Error(`--write off should not advertise ${hiddenWriteTool} tool; got ${disabledWriteToolNames.join(', ')}`);
   }

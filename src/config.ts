@@ -26,6 +26,8 @@ export interface CodexProConfig {
   toolMode: ToolMode;
   inheritEnv: boolean;
   maxReadBytes: number;
+  maxImageBytes: number;
+  maxImageBatchBytes: number;
   maxWriteBytes: number;
   maxOutputBytes: number;
   maxSearchResults: number;
@@ -310,6 +312,8 @@ export function loadConfig(argv = process.argv.slice(2)): CodexProConfig {
     toolMode: toolModeFrom(toolModeArg ?? process.env.CODEXPRO_TOOL_MODE),
     inheritEnv: process.env.CODEXPRO_INHERIT_ENV === "1",
     maxReadBytes: numberFrom(process.env.CODEXPRO_MAX_READ_BYTES, 180_000, 4_000, 2_000_000),
+    maxImageBytes: numberFrom(process.env.CODEXPRO_MAX_IMAGE_BYTES, 4_000_000, 4_000, 20_000_000),
+    maxImageBatchBytes: numberFrom(process.env.CODEXPRO_MAX_IMAGE_BATCH_BYTES, 20_000_000, 4_000, 100_000_000),
     maxWriteBytes: numberFrom(process.env.CODEXPRO_MAX_WRITE_BYTES, 1_000_000, 1_000, 10_000_000),
     maxOutputBytes: numberFrom(process.env.CODEXPRO_MAX_OUTPUT_BYTES, 120_000, 4_000, 2_000_000),
     maxSearchResults: numberFrom(process.env.CODEXPRO_MAX_SEARCH_RESULTS, 200, 5, 2_000),

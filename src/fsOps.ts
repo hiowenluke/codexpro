@@ -32,6 +32,23 @@ export interface ReadFileResult {
   truncated: boolean;
 }
 
+export interface ReadImageResult {
+  path: string;
+  data: string;
+  mimeType: string;
+  bytes: number;
+  sha256: string;
+}
+
+export interface ReadImagesResult {
+  images: ReadImageResult[];
+  imageCount: number;
+  totalBytes: number;
+  candidateCount: number;
+  truncated: boolean;
+  skipped: string[];
+}
+
 export interface DiffResult {
   diff: string;
   additions: number;
@@ -39,8 +56,39 @@ export interface DiffResult {
   changed: boolean;
 }
 
+export interface MoveFileResult {
+  oldPath: string;
+  newPath: string;
+  bytes: number;
+  moved: boolean;
+}
+
 export function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+function sha256Bytes(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function detectImageMime(buffer: Buffer): string | undefined {
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (buffer.length >= 6 && (buffer.toString("ascii", 0, 6) === "GIF87a" || buffer.toString("ascii", 0, 6) === "GIF89a")) {
+    return "image/gif";
+  }
+  if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") {
+    return "image/webp";
+  }
+  return undefined;
+}
+
+function hasSupportedImageExtension(relPath: string): boolean {
+  return /\.(?:png|jpe?g|gif|webp)$/i.test(relPath);
 }
 
 function splitLines(text: string): string[] {
@@ -229,6 +277,145 @@ export async function readTextFile(
   };
 }
 
+export async function readImageFile(
+  config: CodexProConfig,
+  guard: PathGuard,
+  workspace: Workspace,
+  filePath: string,
+  options: { maxBytes?: number } = {}
+): Promise<ReadImageResult> {
+  const resolved = guard.resolve(workspace, filePath);
+  const maxBytes = Math.min(options.maxBytes ?? config.maxImageBytes, config.maxImageBytes);
+  const stat = await fsp.stat(resolved.absPath);
+  if (!stat.isFile()) {
+    throw new CodexProError(`Not a file: ${resolved.relPath}`);
+  }
+  if (stat.size > maxBytes) {
+    throw new CodexProError(`Image is too large (${stat.size} bytes). Limit: ${maxBytes} bytes.`);
+  }
+  const buffer = await fsp.readFile(resolved.absPath);
+  const mimeType = detectImageMime(buffer);
+  if (!mimeType) {
+    throw new CodexProError(`Unsupported image type: ${resolved.relPath}. Supported image formats: PNG, JPEG, GIF, WebP.`);
+  }
+  return {
+    path: resolved.relPath,
+    data: buffer.toString("base64"),
+    mimeType,
+    bytes: buffer.byteLength,
+    sha256: sha256Bytes(buffer)
+  };
+}
+
+async function collectImagePaths(
+  guard: PathGuard,
+  workspace: Workspace,
+  directory: string,
+  options: { recursive?: boolean; includeHidden?: boolean; maxCandidates: number }
+): Promise<{ paths: string[]; truncated: boolean }> {
+  const target = guard.resolve(workspace, directory);
+  const stat = await fsp.stat(target.absPath);
+  if (!stat.isDirectory()) {
+    throw new CodexProError(`Not a directory: ${target.relPath}`);
+  }
+
+  const paths: string[] = [];
+  let truncated = false;
+
+  async function walk(absDir: string): Promise<void> {
+    if (paths.length >= options.maxCandidates) {
+      truncated = true;
+      return;
+    }
+    const entries = (await fsp.readdir(absDir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (paths.length >= options.maxCandidates) {
+        truncated = true;
+        return;
+      }
+      if (!options.includeHidden && isHiddenName(entry.name)) continue;
+      const abs = path.join(absDir, entry.name);
+      const rel = displayPath(abs, workspace.root);
+      if (guard.isBlockedRelativePath(rel)) continue;
+      if (entry.isDirectory()) {
+        if (options.recursive) await walk(abs);
+      } else if (entry.isFile() && hasSupportedImageExtension(rel)) {
+        paths.push(rel);
+      }
+    }
+  }
+
+  await walk(target.absPath);
+  return { paths, truncated };
+}
+
+export async function readImageFiles(
+  config: CodexProConfig,
+  guard: PathGuard,
+  workspace: Workspace,
+  options: {
+    paths?: string[];
+    directory?: string;
+    recursive?: boolean;
+    includeHidden?: boolean;
+    maxImages: number;
+    maxBytesPerImage?: number;
+    maxTotalBytes: number;
+  }
+): Promise<ReadImagesResult> {
+  const requestedPaths = (options.paths ?? []).map((item) => item.trim()).filter(Boolean);
+  const candidates: string[] = [];
+  let directoryTruncated = false;
+
+  for (const item of requestedPaths) candidates.push(item);
+  if (options.directory?.trim()) {
+    const collected = await collectImagePaths(guard, workspace, options.directory, {
+      recursive: options.recursive,
+      includeHidden: options.includeHidden,
+      maxCandidates: options.maxImages + 1
+    });
+    candidates.push(...collected.paths);
+    directoryTruncated = collected.truncated;
+  }
+
+  const uniqueCandidates = [...new Set(candidates)];
+  if (!uniqueCandidates.length) {
+    throw new CodexProError("read_images requires at least one path or a directory containing supported image files.");
+  }
+
+  const images: ReadImageResult[] = [];
+  const skipped: string[] = [];
+  let totalBytes = 0;
+  let truncated = directoryTruncated || uniqueCandidates.length > options.maxImages;
+
+  for (const relPath of uniqueCandidates.slice(0, options.maxImages)) {
+    const resolved = guard.resolve(workspace, relPath);
+    const stat = await fsp.stat(resolved.absPath);
+    if (totalBytes + stat.size > options.maxTotalBytes) {
+      truncated = true;
+      skipped.push(`${resolved.relPath}: batch byte limit`);
+      break;
+    }
+    try {
+      const image = await readImageFile(config, guard, workspace, relPath, { maxBytes: options.maxBytesPerImage });
+      images.push(image);
+      totalBytes += image.bytes;
+    } catch (error) {
+      if (!options.directory) throw error;
+      skipped.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return {
+    images,
+    imageCount: images.length,
+    totalBytes,
+    candidateCount: uniqueCandidates.length,
+    truncated,
+    skipped
+  };
+}
+
 export async function writeTextFile(
   config: CodexProConfig,
   guard: PathGuard,
@@ -315,6 +502,43 @@ export async function editTextFile(
   const diff = makeUnifiedDiff(before, after, resolved.relPath);
   await fsp.writeFile(resolved.absPath, after, "utf8");
   return { path: resolved.relPath, replacements, bytes: afterBytes, sha256: sha256(after), diff };
+}
+
+export async function moveFile(
+  guard: PathGuard,
+  workspace: Workspace,
+  fromPath: string,
+  toPath: string,
+  options: { createDirs?: boolean } = {}
+): Promise<MoveFileResult> {
+  const from = guard.resolve(workspace, fromPath);
+  const to = guard.resolve(workspace, toPath, { forWrite: true });
+  if (from.absPath === to.absPath) {
+    throw new CodexProError(`Source and destination are the same path: ${from.relPath}`);
+  }
+
+  const sourceLstat = await fsp.lstat(from.absPath);
+  if (sourceLstat.isSymbolicLink()) {
+    throw new CodexProError(`Refusing to move a symlink: ${from.relPath}`);
+  }
+  const sourceStat = await fsp.stat(from.absPath);
+  if (!sourceStat.isFile()) {
+    throw new CodexProError(`Move supports files only: ${from.relPath}`);
+  }
+  if (fs.existsSync(to.absPath)) {
+    throw new CodexProError(`Destination already exists: ${to.relPath}`);
+  }
+
+  if (options.createDirs) {
+    await fsp.mkdir(path.dirname(to.absPath), { recursive: true });
+  }
+  await fsp.rename(from.absPath, to.absPath);
+  return {
+    oldPath: from.relPath,
+    newPath: to.relPath,
+    bytes: sourceStat.size,
+    moved: true
+  };
 }
 
 export async function ensureAiBridge(config: CodexProConfig, guard: PathGuard, workspace: Workspace): Promise<string[]> {
