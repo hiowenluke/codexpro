@@ -1152,6 +1152,8 @@ git status, git diff, git log, git show, git branch, git rev-parse, git ls-files
 git add, non-interactive git commit -m / --message
 npm/pnpm/yarn/bun test/build/lint/typecheck/check, including suffix scripts such as npm run build:clients
 pytest, go test, cargo test, cargo check, cargo clippy, tsc, eslint, biome check
+workspace Python scripts when CODEXPRO_SAFE_PYTHON=workspace
+configured workspace Python scripts from CODEXPRO_SAFE_PYTHON_SCRIPTS for stricter setups
 ```
 
 Use the MCP `read` and `search` tools for file contents. The safe shell blocks obvious destructive commands, redirects, pipes, `curl`, `wget`, `ssh`, `docker`, `git push/reset/clean/checkout/switch/restore`, `git commit --amend`, `find -exec`, `find -delete`, and file-content shell readers such as `cat`, `grep`, `rg`, `head`, and `tail`.
@@ -1159,6 +1161,20 @@ Use the MCP `read` and `search` tools for file contents. The safe shell blocks o
 Safe `git commit` support is intended for normal non-interactive commits after review. It may still run repository git hooks, so use `--no-bash` for untrusted repos.
 
 Package-manager scripts such as `npm run build` execute code from the repo. Use `--no-bash` for untrusted repos.
+
+To allow workspace Python scripts in safe bash without editing configuration for every new file, enable workspace Python mode once:
+
+```bash
+CODEXPRO_SAFE_PYTHON=workspace codexpro start
+```
+
+Allowed commands include `python scripts/render_png.py`, `python3 scripts/render_png.py`, `python -u scripts/render_png.py`, and `uv run python scripts/render_png.py`. The script path must be workspace-relative, point to an existing `.py` file, and still pass the normal workspace path guard.
+
+For stricter setups, use comma-separated workspace-relative `.py` paths instead:
+
+```bash
+CODEXPRO_SAFE_PYTHON_SCRIPTS=scripts/render_png.py,tools/export_assets.py codexpro start
+```
 
 ## Image reads
 

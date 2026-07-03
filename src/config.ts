@@ -36,6 +36,8 @@ export interface CodexProConfig {
   blockedGlobs: string[];
   contextDir: string;
   toolCards: boolean;
+  safePythonWorkspace: boolean;
+  safePythonScripts: string[];
 }
 
 const DEFAULT_BLOCKED_GLOBS = [
@@ -128,6 +130,37 @@ function splitList(value: string | undefined, delimiter: string = path.delimiter
 
 function splitRoots(value: string | undefined): string[] {
   return splitList(value, path.delimiter);
+}
+
+function normalizeSafePythonScript(input: string): string {
+  const raw = input.trim().replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!raw) throw new Error("CODEXPRO_SAFE_PYTHON_SCRIPTS entries must not be empty.");
+  if (path.isAbsolute(raw) || path.win32.isAbsolute(raw)) {
+    throw new Error("CODEXPRO_SAFE_PYTHON_SCRIPTS entries must be workspace-relative paths.");
+  }
+  const normalized = path.posix.normalize(raw);
+  if (!normalized || normalized === "." || normalized.startsWith("../")) {
+    throw new Error("CODEXPRO_SAFE_PYTHON_SCRIPTS entries must stay inside the workspace.");
+  }
+  if (!normalized.endsWith(".py")) {
+    throw new Error("CODEXPRO_SAFE_PYTHON_SCRIPTS entries must point to .py files.");
+  }
+  if (normalized.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw new Error("CODEXPRO_SAFE_PYTHON_SCRIPTS entries must be simple relative paths.");
+  }
+  return normalized;
+}
+
+function safePythonScriptsFrom(value: string | undefined): string[] {
+  const entries = splitList(value, ",").filter((part) => !["*", "**/*.py", "workspace", "all"].includes(part));
+  return [...new Set(entries.map(normalizeSafePythonScript))];
+}
+
+function safePythonWorkspaceFrom(value: string | undefined, scriptsValue: string | undefined): boolean {
+  const raw = value?.trim().toLowerCase();
+  if (raw && ["1", "true", "yes", "y", "on", "workspace", "all"].includes(raw)) return true;
+  const scriptRaw = scriptsValue?.trim().toLowerCase();
+  return scriptRaw === "*" || scriptRaw === "**/*.py" || scriptRaw === "workspace" || scriptRaw === "all";
 }
 
 function toRealDir(input: string): string {
@@ -281,6 +314,12 @@ export function loadConfig(argv = process.argv.slice(2)): CodexProConfig {
         ? args["tool-cards"]
         : undefined;
   const extraBlockedGlobs = splitList(process.env.CODEXPRO_BLOCKED_GLOBS, ",");
+  const safePythonScriptsValue = process.env.CODEXPRO_SAFE_PYTHON_SCRIPTS ?? process.env.CODEXPRO_ALLOWED_PYTHON_SCRIPTS;
+  const safePythonWorkspace = safePythonWorkspaceFrom(
+    process.env.CODEXPRO_SAFE_PYTHON ?? process.env.CODEXPRO_ALLOW_WORKSPACE_PYTHON ?? process.env.CODEXPRO_SAFE_PYTHON_WORKSPACE,
+    safePythonScriptsValue
+  );
+  const safePythonScripts = safePythonScriptsFrom(safePythonScriptsValue);
   const host = hostArg ?? process.env.CODEXPRO_HOST ?? process.env.HOST ?? "127.0.0.1";
   const authToken = process.env.CODEXPRO_HTTP_TOKEN ?? process.env.CODEBASE_BRIDGE_HTTP_TOKEN;
   const allowNoToken = boolFrom(process.env.CODEXPRO_ALLOW_NO_HTTP_TOKEN, false) && isLoopbackHost(host);
@@ -322,6 +361,8 @@ export function loadConfig(argv = process.argv.slice(2)): CodexProConfig {
     httpSessionTtlMs: numberFrom(process.env.CODEXPRO_HTTP_SESSION_TTL_MS, 30 * 60_000, 60_000, 24 * 60 * 60_000),
     blockedGlobs: [...DEFAULT_BLOCKED_GLOBS, ...extraBlockedGlobs],
     contextDir: contextDirFrom(process.env.CODEXPRO_CONTEXT_DIR),
-    toolCards: boolFrom(toolCardsArg ?? process.env.CODEXPRO_TOOL_CARDS, false)
+    toolCards: boolFrom(toolCardsArg ?? process.env.CODEXPRO_TOOL_CARDS, false),
+    safePythonWorkspace,
+    safePythonScripts
   };
 }

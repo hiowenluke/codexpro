@@ -118,12 +118,13 @@ function compact(command: string): string {
   return command.trim().replace(/\s+/g, " ");
 }
 
-function startsWithAllowedPrefix(command: string): boolean {
+function startsWithAllowedPrefix(config: CodexProConfig, guard: PathGuard, workspace: Workspace, cwdRelPath: string, command: string): boolean {
   const normalized = compact(command);
   return (
     isAllowedPackageScript(normalized) ||
     isAllowedGitAdd(normalized) ||
     isAllowedGitCommit(normalized) ||
+    isAllowedPythonScript(config, guard, workspace, cwdRelPath, normalized) ||
     SAFE_ALLOWED_PREFIXES.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix} `))
   );
 }
@@ -145,7 +146,81 @@ function isAllowedGitCommit(command: string): boolean {
   return /(^|\s)--message(?:=|\s)/.test(command) || /(^|\s)-[A-Za-z]*m[A-Za-z]*(?:\s|$)/.test(command);
 }
 
-function assertSafeCommand(config: CodexProConfig, command: string): void {
+function unquoteToken(value: string): string {
+  if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function shellWords(command: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | "" = "";
+  for (const char of command) {
+    if (quote) {
+      if (char === quote) quote = "";
+      else current += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (quote) return [];
+  if (current) words.push(current);
+  return words;
+}
+
+function normalizeScriptToken(value: string): string {
+  const raw = unquoteToken(value).trim().replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!raw || path.isAbsolute(raw) || path.win32.isAbsolute(raw)) return "";
+  const normalized = path.posix.normalize(raw);
+  if (!normalized || normalized === "." || normalized.startsWith("../")) return "";
+  if (normalized.split("/").some((part) => !part || part === "." || part === "..")) return "";
+  return normalized;
+}
+
+function pythonScriptToken(command: string): string {
+  const tokens = shellWords(command);
+  let index = 0;
+  if (tokens[index] === "uv" && tokens[index + 1] === "run") index += 2;
+  if (!/^python(?:3(?:\.\d+)?)?$/.test(tokens[index] ?? "")) return "";
+  index += 1;
+  if (tokens[index] === "-u") index += 1;
+  return normalizeScriptToken(tokens[index] ?? "");
+}
+
+function workspaceRelativeScriptPath(scriptPath: string, cwdRelPath: string): string {
+  const cwd = normalizeScriptToken(cwdRelPath === "." ? "" : cwdRelPath);
+  return normalizeScriptToken(cwd ? `${cwd}/${scriptPath}` : scriptPath);
+}
+
+function isAllowedPythonScript(config: CodexProConfig, guard: PathGuard, workspace: Workspace, cwdRelPath: string, command: string): boolean {
+  if (!config.safePythonWorkspace && !config.safePythonScripts.length) return false;
+  const scriptPath = pythonScriptToken(command);
+  if (!scriptPath || !scriptPath.endsWith(".py")) return false;
+  const workspaceScriptPath = workspaceRelativeScriptPath(scriptPath, cwdRelPath);
+  if (!workspaceScriptPath || !workspaceScriptPath.endsWith(".py")) return false;
+  if (!config.safePythonWorkspace && !config.safePythonScripts.includes(workspaceScriptPath)) return false;
+  const resolved = guard.resolve(workspace, workspaceScriptPath);
+  try {
+    return fs.statSync(resolved.absPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function assertSafeCommand(config: CodexProConfig, guard: PathGuard, workspace: Workspace, cwdRelPath: string, command: string): void {
   if (config.bashMode === "off") {
     throw new CodexProError("bash tool is disabled. Start with CODEXPRO_BASH_MODE=safe or CODEXPRO_BASH_MODE=full to enable it.");
   }
@@ -161,10 +236,10 @@ function assertSafeCommand(config: CodexProConfig, command: string): void {
       );
     }
   }
-  if (!startsWithAllowedPrefix(normalized)) {
+  if (!startsWithAllowedPrefix(config, guard, workspace, cwdRelPath, normalized)) {
     throw new CodexProError(
       `Command is not in the safe bash allowlist: ${normalized}\n` +
-        "Allowed examples: ls, find, git status, git diff, git add, git commit -m, npm test, npm run typecheck, npm run build:clients, pytest, go test, cargo test. Use read/search tools for file contents. " +
+        "Allowed examples: ls, find, git status, git diff, git add, git commit -m, npm test, npm run typecheck, npm run build:clients, pytest, go test, cargo test, configured CODEXPRO_SAFE_PYTHON_SCRIPTS entries, or workspace Python scripts when CODEXPRO_SAFE_PYTHON=workspace. Use read/search tools for file contents. " +
         "Use CODEXPRO_BASH_MODE=full for trusted local automation."
     );
   }
@@ -226,8 +301,8 @@ export async function runBash(
 ): Promise<BashResult> {
   if (!command?.trim()) throw new CodexProError("command is required.");
   const bashSessionId = assertBashSession(config, options.sessionId);
-  assertSafeCommand(config, command);
   const cwdResolved = guard.resolve(workspace, options.cwd ?? ".");
+  assertSafeCommand(config, guard, workspace, cwdResolved.relPath, command);
   const cwd = cwdResolved.absPath;
   const timeoutMs = Math.max(1_000, Math.min(options.timeoutMs ?? 30_000, 180_000));
   const start = Date.now();

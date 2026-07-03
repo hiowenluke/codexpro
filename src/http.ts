@@ -394,6 +394,8 @@ function profileResponse(config: CodexProConfig): Record<string, unknown> {
       writeMode: config.writeMode,
       toolMode: config.toolMode,
       toolCards: config.toolCards,
+      safePythonWorkspace: config.safePythonWorkspace,
+      safePythonScripts: config.safePythonScripts,
       widgetDomain: config.widgetDomain,
       authEnabled: Boolean(config.authToken)
     }
@@ -1595,9 +1597,11 @@ async function main(): Promise<void> {
       requireBashSession: config.requireBashSession,
       codexSessions: config.codexSessions,
       writeMode: config.writeMode,
-      toolMode: config.toolMode,
-      toolCards: config.toolCards,
-      widgetDomain: config.widgetDomain,
+            toolMode: config.toolMode,
+            toolCards: config.toolCards,
+            safePythonWorkspace: config.safePythonWorkspace,
+            safePythonScripts: config.safePythonScripts,
+            widgetDomain: config.widgetDomain,
       contextDir: config.contextDir,
       authEnabled: Boolean(config.authToken),
       authRequired: Boolean(config.authToken)

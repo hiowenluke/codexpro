@@ -155,6 +155,9 @@ await fs.writeFile(path.join(tmp, 'package.json'), JSON.stringify({
     'build:clients': "node -e \"console.log('clients ok')\""
   }
 }, null, 2), 'utf8');
+await fs.mkdir(path.join(tmp, 'scripts'), { recursive: true });
+await fs.writeFile(path.join(tmp, 'scripts', 'allowed_python.py'), 'print("safe python ok")\n', 'utf8');
+await fs.writeFile(path.join(tmp, 'scripts', 'allowed python.py'), 'print("safe python with spaces ok")\n', 'utf8');
 const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'codexpro-outside-'));
 await fs.writeFile(path.join(outside, 'secret.txt'), 'do-not-read', 'utf8');
 const danglingSymlinks = [];
@@ -196,7 +199,15 @@ for (const args of [['config', 'user.email', 'smoke@example.com'], ['config', 'u
 
 const client = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--bash', 'safe', '--tool-mode', 'full'], {
   cwd: path.resolve('.'),
-  env: { ...process.env, CODEXPRO_ROOT: tmp, CODEXPRO_ALLOWED_ROOTS: tmp, CODEXPRO_WIDGET_DOMAIN: 'https://widgets.codexpro.test', CODEXPRO_TOOL_CARDS: '0' }
+  env: {
+    ...process.env,
+    CODEXPRO_ROOT: tmp,
+    CODEXPRO_ALLOWED_ROOTS: tmp,
+    CODEXPRO_WIDGET_DOMAIN: 'https://widgets.codexpro.test',
+    CODEXPRO_TOOL_CARDS: '0',
+    CODEXPRO_SAFE_PYTHON_SCRIPTS: '',
+    CODEXPRO_ALLOWED_PYTHON_SCRIPTS: ''
+  }
 });
 
 await client.request('initialize', {
@@ -505,6 +516,61 @@ if (!safeGitLog.structuredContent.stdout?.includes('safe bash commit')) {
 const clientBuild = await client.request('tools/call', { name: 'bash', arguments: { workspace_id: ws, command: 'npm run build:clients', timeout_ms: 60000 } });
 if (!clientBuild.structuredContent.stdout?.includes('clients ok')) {
   throw new Error('safe bash did not run npm run build:clients');
+}
+await expectToolError('bash', { workspace_id: ws, command: 'python3 scripts/allowed_python.py' }, /allowlist/i);
+const pythonCommand = ['python3', 'python'].find((command) =>
+  spawnSync(process.platform === 'win32' ? 'where' : 'sh', process.platform === 'win32' ? [command] : ['-lc', `command -v ${command} >/dev/null 2>&1`]).status === 0
+);
+if (pythonCommand) {
+  const pythonClient = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--bash', 'safe'], {
+    cwd: path.resolve('.'),
+    env: {
+      ...process.env,
+      CODEXPRO_ROOT: tmp,
+      CODEXPRO_ALLOWED_ROOTS: tmp,
+      CODEXPRO_SAFE_PYTHON_SCRIPTS: 'scripts/allowed_python.py,scripts/allowed python.py',
+      CODEXPRO_ALLOWED_PYTHON_SCRIPTS: ''
+    }
+  });
+  await pythonClient.request('initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: {},
+    clientInfo: { name: 'codexpro-python-allowlist-smoke', version: '0.1.0' }
+  });
+  pythonClient.notify('notifications/initialized');
+  const safePython = await pythonClient.request('tools/call', { name: 'bash', arguments: { command: `${pythonCommand} scripts/allowed_python.py` } });
+  if (safePython.structuredContent.exitCode !== 0 || !safePython.structuredContent.stdout?.includes('safe python ok')) {
+    throw new Error(`safe bash did not run allowlisted Python script: ${JSON.stringify(safePython.structuredContent)}`);
+  }
+  const safePythonWithSpaces = await pythonClient.request('tools/call', { name: 'bash', arguments: { command: `${pythonCommand} "scripts/allowed python.py"` } });
+  if (safePythonWithSpaces.structuredContent.exitCode !== 0 || !safePythonWithSpaces.structuredContent.stdout?.includes('safe python with spaces ok')) {
+    throw new Error(`safe bash did not run allowlisted Python script with spaces: ${JSON.stringify(safePythonWithSpaces.structuredContent)}`);
+  }
+  await pythonClient.close();
+
+  const workspacePythonClient = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--bash', 'safe'], {
+    cwd: path.resolve('.'),
+    env: {
+      ...process.env,
+      CODEXPRO_ROOT: tmp,
+      CODEXPRO_ALLOWED_ROOTS: tmp,
+      CODEXPRO_SAFE_PYTHON: 'workspace',
+      CODEXPRO_SAFE_PYTHON_SCRIPTS: '',
+      CODEXPRO_ALLOWED_PYTHON_SCRIPTS: ''
+    }
+  });
+  await workspacePythonClient.request('initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: {},
+    clientInfo: { name: 'codexpro-workspace-python-smoke', version: '0.1.0' }
+  });
+  workspacePythonClient.notify('notifications/initialized');
+  const workspacePython = await workspacePythonClient.request('tools/call', { name: 'bash', arguments: { command: `${pythonCommand} "scripts/allowed python.py"` } });
+  if (workspacePython.structuredContent.exitCode !== 0 || !workspacePython.structuredContent.stdout?.includes('safe python with spaces ok')) {
+    throw new Error(`safe bash workspace Python mode did not run workspace script: ${JSON.stringify(workspacePython.structuredContent)}`);
+  }
+  await expectToolError('bash', { command: `${pythonCommand} package.json` }, /allowlist/i, workspacePythonClient);
+  await workspacePythonClient.close();
 }
 const exported = await client.request('tools/call', { name: 'export_pro_context', arguments: { workspace_id: ws, selected_paths: ['demo.txt'], max_files: 4, max_total_bytes: 80000 } });
 if (exported.structuredContent.path !== '.ai-bridge/pro-context.md') throw new Error('export_pro_context wrote an unexpected path');

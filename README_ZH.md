@@ -355,9 +355,23 @@ CodexPro 是本地开发桥，不是操作系统级沙箱。
 - 写入限制在配置的工作区 root 内。
 - 常见敏感路径会被拒绝：`.env`、私钥、`.git`、`node_modules`、生成目录、缓存目录。
 - symlink 逃逸会被阻止。
-- safe bash 只允许常见检查、搜索、受限 git add/commit、lint、test、typecheck、build 等命令。
+- safe bash 只允许常见检查、搜索、受限 git add/commit、lint、test、typecheck、build；设置 `CODEXPRO_SAFE_PYTHON=workspace` 后，也允许运行 workspace 内现有 `.py` 脚本。
 - `codexpro start --no-bash` 会完全关闭 ChatGPT 可调用的 bash 工具。
 - `execute-handoff` 和 `watch-handoff` 是本地 CLI 命令，不是远程 MCP 工具。
+
+如果你希望后续新增 Python 脚本不需要反复改配置，可以一次性启用 workspace Python 模式：
+
+```bash
+CODEXPRO_SAFE_PYTHON=workspace codexpro start
+```
+
+之后 safe bash 可运行 `python scripts/render_png.py`、`python3 scripts/render_png.py`、`python -u scripts/render_png.py` 或 `uv run python scripts/render_png.py`。脚本路径必须是 workspace 相对路径、指向现有 `.py` 文件，并且仍会经过 workspace path guard。
+
+如果想更严格，也可以用逗号分隔的 workspace 相对 `.py` 路径：
+
+```bash
+CODEXPRO_SAFE_PYTHON_SCRIPTS=scripts/render_png.py,tools/export_assets.py codexpro start
+```
 
 只有在你信任当前仓库和命令时，才考虑更宽的权限，例如 full bash、自定义执行器、额外 allow root。
 

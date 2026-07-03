@@ -856,6 +856,8 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         maxOutputBytes: config.maxOutputBytes,
         maxSearchResults: config.maxSearchResults,
         blockedGlobs: config.blockedGlobs,
+        safePythonWorkspace: config.safePythonWorkspace,
+        safePythonScripts: config.safePythonScripts,
         registeredTools: registeredToolNames(server),
         registeredToolCount: registeredToolNames(server).length
       };
@@ -1739,7 +1741,7 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
     {
       title: "Bash",
       description:
-        "Run one allowlisted verification or local git staging/commit command in the workspace, such as tests, build, lint, typecheck, git add, git commit -m, or a project script. Do not use for git status/diff or file inspection; use show_changes, tree, search, and read instead. Do not chain commands with &&, pipes, redirects, or shell file readers.",
+        "Run one allowlisted verification or local git staging/commit command in the workspace, such as tests, build, lint, typecheck, git add, git commit -m, configured safe Python scripts, or a project script. Do not use for git status/diff or file inspection; use show_changes, tree, search, and read instead. Do not chain commands with &&, pipes, redirects, or shell file readers.",
       inputSchema: {
         workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use default workspace."),
         command: z.string().describe("Command to run."),
