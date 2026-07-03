@@ -85,8 +85,8 @@ Options:
                              Tool surface exposed to ChatGPT. Default: standard.
                              minimal = config/self-test plus open/read/read_image/read_images/write/edit/move/bash/show_changes.
                              full = expose every compatibility and advanced tool.
-  --widget-domain <origin>   Dedicated HTTPS origin for ChatGPT widget iframes.
-                             Required for app submission. Default: https://rebel0789.github.io.
+  --widget-domain <origin>   Optional dedicated HTTPS origin for ChatGPT widget iframes.
+                             Omit to use ChatGPT's default OpenAI sandbox origin.
   --tool-cards <on|off>      Opt in to ChatGPT widget metadata on tool descriptors. Default: off.
   --tunnel <none|cloudflare|cloudflare-named|ngrok>
                              Expose local MCP. Default: cloudflare.
@@ -550,7 +550,8 @@ function saveRuntimeConnection(root, details, options = {}) {
     requireBashSession: Boolean(options.requireBashSession),
     write: options.write ?? '',
     toolMode: options.toolMode ?? '',
-    toolCards: Boolean(options.toolCards)
+    toolCards: Boolean(options.toolCards),
+    widgetDomain: options.widgetDomain ?? ''
   };
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   try {
@@ -2425,8 +2426,9 @@ function printConnectorBlock(endpoint, token, options = {}) {
   if (options.codexSessions && options.codexSessions !== 'off') console.log(`  Codex      sessions=${options.codexSessions}`);
   if (options.bashSession) console.log(`  Bash       session=${options.bashSession}${options.requireBashSession ? ' required' : ''}`);
   console.log(`  Connector  ${publicHttps ? 'public HTTPS' : 'local HTTP'}`);
+  console.log(`  Endpoint   ${details.endpoint}`);
   if (copied.ok) {
-    console.log(`  URL        copied with ${copied.command}`);
+    console.log(`  URL        copied with ${copied.command}${details.token ? ' (includes token)' : ''}`);
   } else if (shouldCopy) {
     console.log('  URL        copy failed; copy manually:');
     console.log(serverUrl);
@@ -3250,7 +3252,10 @@ function writeControlPrompt() {
 }
 
 function runControlPanel(details, cleanup = cleanupChildren) {
-  if (!process.stdin.isTTY) return new Promise(() => {});
+  if (!process.stdin.isTTY) {
+    setInterval(() => {}, 60 * 60 * 1000);
+    return new Promise(() => {});
+  }
 
   writeControlPrompt();
 
@@ -3429,7 +3434,7 @@ async function main() {
   const { bashSession, requireBashSession } = bashSessionOptions(args, profile);
   const write = writeOption(args, profile, mode);
   const toolMode = optionValue(args, profile, 'toolMode', ['CODEXPRO_TOOL_MODE'], 'standard');
-  const widgetDomain = optionValue(args, profile, 'widgetDomain', ['CODEXPRO_WIDGET_DOMAIN'], 'https://rebel0789.github.io');
+  const widgetDomain = optionValue(args, profile, 'widgetDomain', ['CODEXPRO_WIDGET_DOMAIN'], '');
   const toolCards = optionBool(args, profile, 'toolCards', ['CODEXPRO_TOOL_CARDS'], false);
   validateChoice('bash', bash, ['off', 'safe', 'full']);
   validateChoice('write', write, ['off', 'handoff', 'workspace']);
@@ -3451,12 +3456,13 @@ async function main() {
     CODEXPRO_CODEX_SESSIONS: codexSessions,
     CODEXPRO_WRITE_MODE: write,
     CODEXPRO_TOOL_MODE: toolMode,
-    CODEXPRO_WIDGET_DOMAIN: widgetDomain,
     CODEXPRO_TOOL_CARDS: toolCards ? '1' : '0',
     CODEXPRO_MODE: mode,
     CODEXPRO_TUNNEL_MODE: tunnel === 'none' ? '0' : '1',
     CODEXPRO_ALLOW_NO_HTTP_TOKEN: args.noAuth ? '1' : '0'
   };
+  if (widgetDomain) serverEnv.CODEXPRO_WIDGET_DOMAIN = widgetDomain;
+  else delete serverEnv.CODEXPRO_WIDGET_DOMAIN;
   if (codexDir) serverEnv.CODEXPRO_CODEX_DIR = codexDir;
   if (args.logRequests || process.env.CODEXPRO_LOG_REQUESTS === '1') serverEnv.CODEXPRO_LOG_REQUESTS = '1';
   if (args.allowHome) serverEnv.CODEXPRO_ALLOW_HOME = '1';
@@ -3479,6 +3485,8 @@ async function main() {
     ...(projectRootReal !== projectRoot ? [labelValue('Package link', projectRoot)] : []),
     labelValue('Workspace', root),
     labelValue('Mode', `${mode}  tools=${toolMode}  write=${write}  bash=${bash}`),
+    labelValue('Tool cards', toolCards ? 'on' : 'off'),
+    ...(toolCards ? [labelValue('Widget origin', widgetDomain || 'OpenAI sandbox')] : []),
     labelValue('Bash transcript', bashTranscript),
     labelValue('Codex sessions', codexSessions),
     ...(bashSession ? [labelValue('Bash session', `${bashSession}${requireBashSession ? ' required' : ''}`)] : []),
@@ -3520,7 +3528,8 @@ async function main() {
     codexSessions,
     bashSession,
     requireBashSession,
-    toolCards
+    toolCards,
+    widgetDomain
   };
 
   if (tunnel === 'none') {

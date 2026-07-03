@@ -154,6 +154,8 @@ function registerToolCardResource(server: McpServer, config: CodexProConfig): vo
   }
 
   const registerUri = (uri: string, name: string): void => {
+    const widgetDomainMeta = config.widgetDomain ? { domain: config.widgetDomain } : {};
+    const openaiWidgetDomainMeta = config.widgetDomain ? { "openai/widgetDomain": config.widgetDomain } : {};
     s.registerResource(
       name,
       uri,
@@ -171,7 +173,7 @@ function registerToolCardResource(server: McpServer, config: CodexProConfig): vo
             _meta: {
               ui: {
                 prefersBorder: true,
-                domain: config.widgetDomain,
+                ...widgetDomainMeta,
                 csp: {
                   connectDomains: [],
                   resourceDomains: []
@@ -179,7 +181,7 @@ function registerToolCardResource(server: McpServer, config: CodexProConfig): vo
               },
               "openai/widgetDescription": "Renders CodexPro workspace orientation, diagnostics, file diffs, change reviews, terminal checks, Pro context exports, and handoff plans as compact developer cards with bounded previews.",
               "openai/widgetPrefersBorder": true,
-              "openai/widgetDomain": config.widgetDomain,
+              ...openaiWidgetDomainMeta,
               "openai/widgetCSP": {
                 connect_domains: [],
                 resource_domains: []

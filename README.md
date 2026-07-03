@@ -345,7 +345,7 @@ _meta.ui.csp
 _meta["openai/widgetCSP"]
 ```
 
-`CODEXPRO_WIDGET_DOMAIN` defaults to `https://rebel0789.github.io` for this package. For app submission, set it to a dedicated HTTPS origin you control, for example `https://widgets.yourdomain.com`. The CSP lists are intentionally strict because the widget has no external fetches, fonts, scripts, images, or iframes.
+`CODEXPRO_WIDGET_DOMAIN` is unset by default, so ChatGPT uses its default OpenAI sandbox origin. For app submission, set it to a dedicated HTTPS origin you control, for example `https://widgets.yourdomain.com`. The CSP lists are intentionally strict because the widget has no external fetches, fonts, scripts, images, or iframes.
 
 After enabling cards, upgrading, or changing widget metadata, open the CodexPro app settings in ChatGPT Developer Mode and click `Refresh` / `Refresh actions` so ChatGPT reloads the tool descriptors and resource URI.
 

@@ -185,7 +185,8 @@ function toolModeFrom(value: string | undefined): ToolMode {
 }
 
 function widgetDomainFrom(value: string | undefined): string {
-  const raw = value?.trim() || "https://rebel0789.github.io";
+  const raw = value?.trim() ?? "";
+  if (!raw || raw === "auto" || raw === "default" || raw === "sandbox") return "";
   let parsed: URL;
   try {
     parsed = new URL(raw);

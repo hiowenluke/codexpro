@@ -312,7 +312,7 @@ function profileForm(config: CodexProConfig): string {
           <legend>Read-only this run</legend>
           <div class="readonly-grid">
             <div><span>Bash transcript</span><code>${escapeHtml(values.bashTranscript)}</code></div>
-            <div><span>Widget origin</span><code>${escapeHtml(values.widgetDomain)}</code></div>
+            <div><span>Widget origin</span><code>${escapeHtml(values.widgetDomain || "OpenAI sandbox")}</code></div>
           </div>
         </fieldset>
         <div class="actions">
@@ -1596,6 +1596,7 @@ async function main(): Promise<void> {
       codexSessions: config.codexSessions,
       writeMode: config.writeMode,
       toolMode: config.toolMode,
+      toolCards: config.toolCards,
       widgetDomain: config.widgetDomain,
       contextDir: config.contextDir,
       authEnabled: Boolean(config.authToken),
@@ -1732,7 +1733,8 @@ async function main(): Promise<void> {
     console.error(`[CodexPro] allowedRoots=${config.allowedRoots.join(", ")}`);
     console.error(`[CodexPro] bashMode=${config.bashMode}`);
     console.error(`[CodexPro] writeMode=${config.writeMode}`);
-    console.error(`[CodexPro] widgetDomain=${config.widgetDomain}`);
+    console.error(`[CodexPro] toolCards=${config.toolCards ? "on" : "off"}`);
+    console.error(`[CodexPro] widgetDomain=${config.widgetDomain || "OpenAI sandbox"}`);
   });
 }
 
