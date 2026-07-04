@@ -1162,6 +1162,21 @@ Safe `git commit` support is intended for normal non-interactive commits after r
 
 Package-manager scripts such as `npm run build` execute code from the repo. Use `--no-bash` for untrusted repos.
 
+## Automatic document commits
+
+Set `CODEXPRO_AUTO_COMMIT_DOCS=1` to make CodexPro queue document-like files changed by successful `write`, `edit`, `move`, or `bash` tool calls, then commit the queued files as one batch after MCP tool calls for that workspace have been idle. CodexPro snapshots git status around each mutating tool call, queues only eligible paths changed by those calls, and leaves unrelated pre-existing uncommitted files alone. If `write`, `edit`, or `move` directly changes a document path that was already dirty, that target path is queued because Git can only commit whole files.
+
+Default eligible extensions are Markdown/text documents, Office-style documents, spreadsheets, PDFs, and common image formats. Override them with a comma-separated list:
+
+```bash
+CODEXPRO_AUTO_COMMIT_DOCS=1 \
+CODEXPRO_AUTO_COMMIT_DOCS_IDLE_MS=120000 \
+CODEXPRO_AUTO_COMMIT_DOC_EXTENSIONS=.md,.docx,.xlsx,.pdf,.png,.jpg,.webp,.svg \
+codexpro start
+```
+
+Automatic commits require the workspace to be a git repository with normal local commit identity configured. CodexPro skips its own context directory, such as `.ai-bridge`, and reports pending/skipped/error status in tool results without turning a successful file edit into a failed tool call. Because MCP does not expose a literal "ChatGPT response finished" event to the server, `CODEXPRO_AUTO_COMMIT_DOCS_IDLE_MS` is the idle finalizer used to approximate that point. `show_changes` reports the pending batch and refreshes the idle timer; it does not commit by itself.
+
 To allow workspace Python scripts in safe bash without editing configuration for every new file, enable workspace Python mode once:
 
 ```bash

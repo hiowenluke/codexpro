@@ -8,6 +8,7 @@ import { repoTree, readTextFile, readImageFile, readImageFiles, writeTextFile, e
 import { searchWorkspace } from "./searchOps.js";
 import { runBash } from "./bashOps.js";
 import { gitDiff, gitLog, gitStatus } from "./gitOps.js";
+import { AutoCommitBatcher, autoCommitSummary, captureAutoCommitSnapshot, type AutoCommitResult } from "./autoCommitDocs.js";
 import { readAiBridgeContext, readCodexContext, workspaceSummary } from "./workspaceOps.js";
 import { buildProContext, exportProContext } from "./proContext.js";
 import { codexproInventory, loadSkill } from "./capabilitiesOps.js";
@@ -74,6 +75,12 @@ function bashTextResult(config: CodexProConfig, result: Awaited<ReturnType<typeo
     "",
     "Raw stdout/stderr are in the structured CodexPro card. Start with `--bash-transcript full` to print raw output in chat."
   ].join("\n");
+}
+
+function appendAutoCommitText(text: string, result: AutoCommitResult): string {
+  const summary = autoCommitSummary(result);
+  if (!summary) return text;
+  return `${text}\n\n## Auto Commit\n\n${summary}`;
 }
 
 function errorResult(error: unknown): any {
@@ -437,7 +444,7 @@ function registerCodexTool(
 function serverInstructions(config: CodexProConfig): string {
   const editInstruction =
     config.writeMode === "workspace"
-      ? "4. Edit source files with write/edit/move. After edits, call show_changes once for git status, diff stats, and review diff."
+      ? `4. Edit source files with write/edit/move. After all edits, call show_changes once for git status, diff stats, and review diff.${config.autoCommitDocs ? " Eligible document changes are queued and committed together after MCP tool calls go idle; show_changes reports the pending batch but does not commit it." : ""}`
       : config.writeMode === "handoff"
         ? "4. Source writes are disabled and generic write/edit/move tools are unavailable. Use handoff_to_agent/handoff_to_codex for plans."
         : "4. Write/edit/move tools are disabled. Do not attempt direct file writes; use handoff or context export workflows instead.";
@@ -465,7 +472,7 @@ function serverInstructions(config: CodexProConfig): string {
         ? `8. Bash session label for this server is "${config.bashSessionId}".`
         : "",
     "",
-    `Current modes: tool=${config.toolMode}, bash=${config.bashMode}, write=${config.writeMode}.`
+    `Current modes: tool=${config.toolMode}, bash=${config.bashMode}, write=${config.writeMode}, autoCommitDocs=${config.autoCommitDocs ? "on" : "off"}.`
   ].filter(Boolean).join("\n");
 }
 
@@ -706,12 +713,24 @@ const BASH_ANNOTATIONS = { readOnlyHint: false, openWorldHint: true, destructive
 const HANDOFF_WRITE_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: false, idempotentHint: false };
 
 const workspaceManagers = new Map<string, WorkspaceManager>();
+const autoCommitBatchers = new Map<string, AutoCommitBatcher>();
 
 function workspaceManagerKey(config: CodexProConfig): string {
   return JSON.stringify({
     defaultRoot: config.defaultRoot,
     allowedRoots: [...config.allowedRoots].sort(),
     contextDir: config.contextDir
+  });
+}
+
+function autoCommitBatcherKey(config: CodexProConfig): string {
+  return JSON.stringify({
+    defaultRoot: config.defaultRoot,
+    allowedRoots: [...config.allowedRoots].sort(),
+    contextDir: config.contextDir,
+    autoCommitDocs: config.autoCommitDocs,
+    autoCommitDocExtensions: [...config.autoCommitDocExtensions].sort(),
+    autoCommitDocsIdleMs: config.autoCommitDocsIdleMs
   });
 }
 
@@ -724,9 +743,19 @@ function getSharedWorkspaceManager(config: CodexProConfig): WorkspaceManager {
   return manager;
 }
 
+function getSharedAutoCommitBatcher(config: CodexProConfig, guard: PathGuard): AutoCommitBatcher {
+  const key = autoCommitBatcherKey(config);
+  const existing = autoCommitBatchers.get(key);
+  if (existing) return existing;
+  const batcher = new AutoCommitBatcher(config, guard);
+  autoCommitBatchers.set(key, batcher);
+  return batcher;
+}
+
 export function createCodexProServer(config: CodexProConfig): McpServer {
   const workspaces = getSharedWorkspaceManager(config);
   const guard = new PathGuard(config);
+  const autoCommitBatcher = getSharedAutoCommitBatcher(config, guard);
   const server = new McpServer({ name: "CodexPro", version: "0.28.6" }, { instructions: serverInstructions(config) });
   registeredToolNamesByServer.set(server as object, []);
   registerToolCardResource(server, config);
@@ -858,6 +887,9 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         blockedGlobs: config.blockedGlobs,
         safePythonWorkspace: config.safePythonWorkspace,
         safePythonScripts: config.safePythonScripts,
+        autoCommitDocs: config.autoCommitDocs,
+        autoCommitDocExtensions: config.autoCommitDocExtensions,
+        autoCommitDocsIdleMs: config.autoCommitDocsIdleMs,
         registeredTools: registeredToolNames(server),
         registeredToolCount: registeredToolNames(server).length
       };
@@ -1618,12 +1650,16 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
       const workspace = workspaces.getWorkspace(args.workspace_id);
       const resolved = guard.resolve(workspace, args.path, { forWrite: true });
       assertWriteToolAllowed(config, resolved.relPath);
+      const autoCommitBefore = captureAutoCommitSnapshot(config, workspace);
       const result = await writeTextFile(config, guard, workspace, args.path, String(args.content ?? ""), {
         createDirs: args.create_dirs !== false,
         overwrite: args.overwrite !== false
       });
+      const autoCommit = autoCommitBatcher.queue(workspace, autoCommitBefore, [result.path], {
+        includePreexistingDirtyCandidates: Boolean(result.diff.diff.trim())
+      });
       const text = `# Write File\n\nPath: ${result.path}\nExisted before: ${result.existed}\nBytes: ${result.bytes}\nSHA-256: ${result.sha256}\nDiff stats: +${result.diff.additions} -${result.diff.deletions}${diffBlock(result.diff.diff)}`;
-      return textResult(text, {
+      return textResult(appendAutoCommitText(text, autoCommit), {
         workspace_id: workspace.id,
         root: workspace.root,
         path: result.path,
@@ -1632,7 +1668,8 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         sha256: result.sha256,
         additions: result.diff.additions,
         deletions: result.diff.deletions,
-        diff: result.diff.diff
+        diff: result.diff.diff,
+        auto_commit: autoCommit
       });
     }
   );
@@ -1663,12 +1700,16 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
       const workspace = workspaces.getWorkspace(args.workspace_id);
       const resolved = guard.resolve(workspace, args.path, { forWrite: true });
       assertWriteToolAllowed(config, resolved.relPath);
+      const autoCommitBefore = captureAutoCommitSnapshot(config, workspace);
       const result = await editTextFile(config, guard, workspace, args.path, String(args.old_text ?? ""), String(args.new_text ?? ""), {
         replaceAll: parseBool(args.replace_all, false),
         expectedReplacements: args.expected_replacements
       });
+      const autoCommit = autoCommitBatcher.queue(workspace, autoCommitBefore, [result.path], {
+        includePreexistingDirtyCandidates: Boolean(result.diff.diff.trim())
+      });
       const text = `# Edit File\n\nPath: ${result.path}\nReplacements: ${result.replacements}\nBytes: ${result.bytes}\nSHA-256: ${result.sha256}\nDiff stats: +${result.diff.additions} -${result.diff.deletions}${diffBlock(result.diff.diff)}`;
-      return textResult(text, {
+      return textResult(appendAutoCommitText(text, autoCommit), {
         workspace_id: workspace.id,
         root: workspace.root,
         path: result.path,
@@ -1677,7 +1718,8 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         sha256: result.sha256,
         additions: result.diff.additions,
         deletions: result.diff.deletions,
-        diff: result.diff.diff
+        diff: result.diff.diff,
+        auto_commit: autoCommit
       });
     }
   );
@@ -1709,8 +1751,12 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
       const toResolved = guard.resolve(workspace, args.to_path, { forWrite: true });
       assertWriteToolAllowed(config, fromResolved.relPath);
       assertWriteToolAllowed(config, toResolved.relPath);
+      const autoCommitBefore = captureAutoCommitSnapshot(config, workspace);
       const result = await moveFile(guard, workspace, args.from_path, args.to_path, {
         createDirs: args.create_dirs !== false
+      });
+      const autoCommit = autoCommitBatcher.queue(workspace, autoCommitBefore, [result.oldPath, result.newPath], {
+        includePreexistingDirtyCandidates: true
       });
       const text = [
         "# Move File",
@@ -1721,7 +1767,7 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         "",
         "Destination overwrites are refused. Use show_changes to review the resulting git rename/change."
       ].join("\n");
-      return textResult(text, {
+      return textResult(appendAutoCommitText(text, autoCommit), {
         workspace_id: workspace.id,
         root: workspace.root,
         old_path: result.oldPath,
@@ -1729,7 +1775,8 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         path: result.newPath,
         bytes: result.bytes,
         moved: result.moved,
-        changed: result.moved
+        changed: result.moved,
+        auto_commit: autoCommit
       });
     }
   );
@@ -1758,13 +1805,23 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
     },
     async (args) => {
       const workspace = workspaces.getWorkspace(args.workspace_id);
+      const autoCommitBefore = captureAutoCommitSnapshot(config, workspace);
       const result = await runBash(config, guard, workspace, String(args.command ?? ""), {
         cwd: args.cwd,
         timeoutMs: args.timeout_ms,
         sessionId: args.session_id
       });
+      const autoCommit = autoCommitBatcher.queue(workspace, autoCommitBefore, undefined, {
+        skipReason: result.exitCode === 0 ? undefined : "bash command exited non-zero."
+      });
       const text = bashTextResult(config, result);
-      return textResult(text, { workspace_id: workspace.id, root: workspace.root, ...result, bash_session_id: result.bashSessionId ?? null });
+      return textResult(appendAutoCommitText(text, autoCommit), {
+        workspace_id: workspace.id,
+        root: workspace.root,
+        ...result,
+        bash_session_id: result.bashSessionId ?? null,
+        auto_commit: autoCommit
+      });
     }
   );
 
@@ -1903,8 +1960,9 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
           ? diffBlock(diff)
           : "\n\nNo diff output."
         : "\n\nDiff omitted by request.";
+      const autoCommit = autoCommitBatcher.touch(workspace);
       const text = `# Show Changes\n\nWorkspace: ${workspace.root}\n\n## Changed\n\n${changedText}\n\n## Diff stats\n\n+${stats.additions} -${stats.deletions}${diffText}`;
-      return textResult(text, {
+      return textResult(appendAutoCommitText(text, autoCommit), {
         workspace_id: workspace.id,
         root: workspace.root,
         path: args.path ?? "workspace changes",
@@ -1917,7 +1975,8 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         additions: stats.additions,
         deletions: stats.deletions,
         changed: !statusError && (changedFiles.length > 0 || stats.changed),
-        diff: responseDiff
+        diff: responseDiff,
+        auto_commit: autoCommit
       });
     }
   );

@@ -359,6 +359,21 @@ CodexPro 是本地开发桥，不是操作系统级沙箱。
 - `codexpro start --no-bash` 会完全关闭 ChatGPT 可调用的 bash 工具。
 - `execute-handoff` 和 `watch-handoff` 是本地 CLI 命令，不是远程 MCP 工具。
 
+如果希望 ChatGPT/CodexPro 修改文档后不用再记得手动 commit，可以启用文档自动提交：
+
+```bash
+CODEXPRO_AUTO_COMMIT_DOCS=1 codexpro start
+```
+
+启用后，成功的 `write`、`edit`、`move`、`bash` 工具调用会在执行前后比对 git status，把这些调用改到的文档类文件加入同一个 pending batch；当这个 workspace 的 MCP 工具调用空闲一段时间后，再把这个 batch 做成一次总 commit。调用前已经 dirty 的无关文件不会被卷入提交。如果 `write`、`edit` 或 `move` 直接改到了一个原本就 dirty 的文档路径，这个目标文件会进入 batch，因为 Git 只能按整文件提交。默认文档类型包括 Markdown、文本、Office 文档、表格、PDF 和常见图片。可以用逗号分隔的后缀自定义：
+
+```bash
+CODEXPRO_AUTO_COMMIT_DOCS_IDLE_MS=120000
+CODEXPRO_AUTO_COMMIT_DOC_EXTENSIONS=.md,.docx,.xlsx,.pdf,.png,.jpg,.webp,.svg
+```
+
+自动提交需要 workspace 本身是 git 仓库，并且已经配置好本地 git user.name/user.email。CodexPro 会跳过 `.ai-bridge` 这类自身上下文目录；提交失败时会在工具结果里报告错误，但不会把原本成功的文件修改变成失败。MCP 服务器拿不到真正的“ChatGPT 本次回复已结束”事件，所以 `CODEXPRO_AUTO_COMMIT_DOCS_IDLE_MS` 是用来近似这个点的空闲 finalizer。`show_changes` 只报告 pending batch 并刷新空闲计时，不再触发 commit。
+
 如果你希望后续新增 Python 脚本不需要反复改配置，可以一次性启用 workspace Python 模式：
 
 ```bash

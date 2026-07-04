@@ -38,6 +38,9 @@ export interface CodexProConfig {
   toolCards: boolean;
   safePythonWorkspace: boolean;
   safePythonScripts: string[];
+  autoCommitDocs: boolean;
+  autoCommitDocExtensions: string[];
+  autoCommitDocsIdleMs: number;
 }
 
 const DEFAULT_BLOCKED_GLOBS = [
@@ -77,6 +80,31 @@ const DEFAULT_BLOCKED_GLOBS = [
   ".cache",
   ".cache/**",
   "**/.cache/**"
+];
+
+const DEFAULT_AUTO_COMMIT_DOC_EXTENSIONS = [
+  ".md",
+  ".mdx",
+  ".txt",
+  ".rst",
+  ".adoc",
+  ".org",
+  ".tex",
+  ".doc",
+  ".docx",
+  ".ppt",
+  ".pptx",
+  ".xls",
+  ".xlsx",
+  ".csv",
+  ".tsv",
+  ".pdf",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".svg"
 ];
 
 function parseArgs(argv: string[]): Record<string, string | string[] | boolean> {
@@ -161,6 +189,22 @@ function safePythonWorkspaceFrom(value: string | undefined, scriptsValue: string
   if (raw && ["1", "true", "yes", "y", "on", "workspace", "all"].includes(raw)) return true;
   const scriptRaw = scriptsValue?.trim().toLowerCase();
   return scriptRaw === "*" || scriptRaw === "**/*.py" || scriptRaw === "workspace" || scriptRaw === "all";
+}
+
+function normalizeAutoCommitDocExtension(input: string): string {
+  const trimmed = input.trim().toLowerCase();
+  if (!trimmed) throw new Error("CODEXPRO_AUTO_COMMIT_DOC_EXTENSIONS entries must not be empty.");
+  const extension = trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+  if (!/^\.[a-z0-9][a-z0-9+_-]{0,31}$/.test(extension)) {
+    throw new Error("CODEXPRO_AUTO_COMMIT_DOC_EXTENSIONS entries must be file extensions such as .md or .png.");
+  }
+  return extension;
+}
+
+function autoCommitDocExtensionsFrom(value: string | undefined): string[] {
+  const entries = splitList(value, ",");
+  if (!entries.length) return DEFAULT_AUTO_COMMIT_DOC_EXTENSIONS;
+  return [...new Set(entries.map(normalizeAutoCommitDocExtension))];
 }
 
 function toRealDir(input: string): string {
@@ -320,6 +364,9 @@ export function loadConfig(argv = process.argv.slice(2)): CodexProConfig {
     safePythonScriptsValue
   );
   const safePythonScripts = safePythonScriptsFrom(safePythonScriptsValue);
+  const autoCommitDocs = boolFrom(process.env.CODEXPRO_AUTO_COMMIT_DOCS, false);
+  const autoCommitDocExtensions = autoCommitDocExtensionsFrom(process.env.CODEXPRO_AUTO_COMMIT_DOC_EXTENSIONS);
+  const autoCommitDocsIdleMs = numberFrom(process.env.CODEXPRO_AUTO_COMMIT_DOCS_IDLE_MS, 120_000, 100, 30 * 60_000);
   const host = hostArg ?? process.env.CODEXPRO_HOST ?? process.env.HOST ?? "127.0.0.1";
   const authToken = process.env.CODEXPRO_HTTP_TOKEN ?? process.env.CODEBASE_BRIDGE_HTTP_TOKEN;
   const allowNoToken = boolFrom(process.env.CODEXPRO_ALLOW_NO_HTTP_TOKEN, false) && isLoopbackHost(host);
@@ -363,6 +410,9 @@ export function loadConfig(argv = process.argv.slice(2)): CodexProConfig {
     contextDir: contextDirFrom(process.env.CODEXPRO_CONTEXT_DIR),
     toolCards: boolFrom(toolCardsArg ?? process.env.CODEXPRO_TOOL_CARDS, false),
     safePythonWorkspace,
-    safePythonScripts
+    safePythonScripts,
+    autoCommitDocs,
+    autoCommitDocExtensions,
+    autoCommitDocsIdleMs
   };
 }

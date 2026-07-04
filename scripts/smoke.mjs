@@ -71,6 +71,10 @@ function assertCommand(args, expected) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 assertCommand(['dist/stdio.js', '--version'], pkg.version);
 assertCommand(['dist/stdio.js', '--help'], 'CodexPro MCP stdio server');
 assertCommand(['dist/http.js', '--version'], pkg.version);
@@ -158,6 +162,12 @@ await fs.writeFile(path.join(tmp, 'package.json'), JSON.stringify({
 await fs.mkdir(path.join(tmp, 'scripts'), { recursive: true });
 await fs.writeFile(path.join(tmp, 'scripts', 'allowed_python.py'), 'print("safe python ok")\n', 'utf8');
 await fs.writeFile(path.join(tmp, 'scripts', 'allowed python.py'), 'print("safe python with spaces ok")\n', 'utf8');
+await fs.writeFile(path.join(tmp, 'scripts', 'write_doc.py'), [
+  'from pathlib import Path',
+  'Path("docs").mkdir(exist_ok=True)',
+  'Path("docs/from-bash.md").write_text("from bash\\n", encoding="utf8")',
+  ''
+].join('\n'), 'utf8');
 const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'codexpro-outside-'));
 await fs.writeFile(path.join(outside, 'secret.txt'), 'do-not-read', 'utf8');
 const danglingSymlinks = [];
@@ -364,6 +374,13 @@ const inventory = await client.request('tools/call', { name: 'codexpro_inventory
 if (inventory.structuredContent.codexpro_tool !== 'codexpro_inventory') throw new Error('inventory result was not tagged for widget rendering');
 const opened = await client.request('tools/call', { name: 'open_workspace', arguments: { root: tmp, include_tree: true } });
 const ws = opened.structuredContent.workspace_id;
+function gitSmoke(args) {
+  const result = spawnSync('git', args, { cwd: tmp, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.stdout}`);
+  }
+  return result.stdout;
+}
 const openedByPath = await client.request('tools/call', { name: 'open_workspace', arguments: { path: tmp, include_tree: false } });
 if (openedByPath.structuredContent.workspace_id !== ws) {
   throw new Error(`open_workspace path alias returned ${openedByPath.structuredContent.workspace_id}, expected ${ws}`);
@@ -572,6 +589,131 @@ if (pythonCommand) {
   await expectToolError('bash', { command: `${pythonCommand} package.json` }, /allowlist/i, workspacePythonClient);
   await workspacePythonClient.close();
 }
+
+const autoCommitClient = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--bash', 'safe', '--tool-mode', 'full'], {
+  cwd: path.resolve('.'),
+  env: {
+    ...process.env,
+    CODEXPRO_ROOT: tmp,
+    CODEXPRO_ALLOWED_ROOTS: tmp,
+    CODEXPRO_AUTO_COMMIT_DOCS: '1',
+    CODEXPRO_AUTO_COMMIT_DOCS_IDLE_MS: '500',
+    CODEXPRO_SAFE_PYTHON: 'workspace',
+    CODEXPRO_SAFE_PYTHON_SCRIPTS: '',
+    CODEXPRO_ALLOWED_PYTHON_SCRIPTS: '',
+    CODEXPRO_TOOL_CARDS: '0'
+  }
+});
+await autoCommitClient.request('initialize', {
+  protocolVersion: '2024-11-05',
+  capabilities: {},
+  clientInfo: { name: 'codexpro-auto-commit-docs-smoke', version: '0.1.0' }
+});
+autoCommitClient.notify('notifications/initialized');
+const autoConfig = await autoCommitClient.request('tools/call', { name: 'server_config', arguments: {} });
+if (autoConfig.structuredContent.autoCommitDocs !== true || autoConfig.structuredContent.autoCommitDocsIdleMs !== 500 || !autoConfig.structuredContent.autoCommitDocExtensions?.includes?.('.md')) {
+  throw new Error(`server_config did not expose auto commit docs config: ${JSON.stringify(autoConfig.structuredContent)}`);
+}
+const autoOpened = await autoCommitClient.request('tools/call', { name: 'open_current_workspace', arguments: { include_tree: false } });
+const autoWs = autoOpened.structuredContent.workspace_id;
+const autoWrite = await autoCommitClient.request('tools/call', {
+  name: 'write',
+  arguments: { workspace_id: autoWs, path: 'docs/auto-commit.md', content: '# Auto Commit\n' }
+});
+if (autoWrite.structuredContent.auto_commit?.status !== 'pending' || !autoWrite.structuredContent.auto_commit?.files?.includes?.('docs/auto-commit.md')) {
+  throw new Error(`write did not queue a new document for batched auto-commit: ${JSON.stringify(autoWrite.structuredContent.auto_commit)}`);
+}
+if (!gitSmoke(['status', '--short', '--', 'docs/auto-commit.md']).includes('?? docs/auto-commit.md')) {
+  throw new Error('queued document was unexpectedly committed before show_changes');
+}
+await fs.writeFile(path.join(tmp, 'docs', 'preexisting.md'), 'dirty before auto call\n', 'utf8');
+const autoSecondWrite = await autoCommitClient.request('tools/call', {
+  name: 'write',
+  arguments: { workspace_id: autoWs, path: 'docs/second.md', content: '# Second\n' }
+});
+if (
+  autoSecondWrite.structuredContent.auto_commit?.status !== 'pending' ||
+  !autoSecondWrite.structuredContent.auto_commit?.files?.includes?.('docs/auto-commit.md') ||
+  !autoSecondWrite.structuredContent.auto_commit?.files?.includes?.('docs/second.md') ||
+  autoSecondWrite.structuredContent.auto_commit?.files?.includes?.('docs/preexisting.md')
+) {
+  throw new Error(`batched auto-commit queue was wrong after second write: ${JSON.stringify(autoSecondWrite.structuredContent.auto_commit)}`);
+}
+if (!gitSmoke(['status', '--short', '--', 'docs/preexisting.md']).includes('?? docs/preexisting.md')) {
+  throw new Error('pre-existing dirty document was unexpectedly committed');
+}
+const autoPreexistingEdit = await autoCommitClient.request('tools/call', {
+  name: 'edit',
+  arguments: {
+    workspace_id: autoWs,
+    path: 'docs/preexisting.md',
+    old_text: 'dirty before auto call',
+    new_text: 'dirty after direct edit'
+  }
+});
+if (autoPreexistingEdit.structuredContent.auto_commit?.status !== 'pending' || !autoPreexistingEdit.structuredContent.auto_commit?.files?.includes?.('docs/preexisting.md')) {
+  throw new Error(`direct edit of a pre-existing dirty document was not queued: ${JSON.stringify(autoPreexistingEdit.structuredContent.auto_commit)}`);
+}
+const autoFlush = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
+for (const expected of ['docs/auto-commit.md', 'docs/second.md', 'docs/preexisting.md']) {
+  if (!autoFlush.structuredContent.auto_commit?.files?.includes?.(expected)) {
+    throw new Error(`show_changes auto-commit omitted ${expected}: ${JSON.stringify(autoFlush.structuredContent.auto_commit)}`);
+  }
+}
+if (autoFlush.structuredContent.auto_commit?.status !== 'pending') {
+  throw new Error(`show_changes should report the pending batch without committing it: ${JSON.stringify(autoFlush.structuredContent.auto_commit)}`);
+}
+await sleep(900);
+if (gitSmoke(['status', '--short', '--', 'docs/auto-commit.md', 'docs/second.md', 'docs/preexisting.md']).trim()) {
+  throw new Error('idle-flushed documents remained dirty');
+}
+if (!gitSmoke(['log', '--oneline', '-1']).includes('docs: auto-commit 3 document files')) {
+  throw new Error('batched auto-commit did not create the expected commit message');
+}
+if (pythonCommand) {
+  const autoBash = await autoCommitClient.request('tools/call', {
+    name: 'bash',
+    arguments: { workspace_id: autoWs, command: `${pythonCommand} scripts/write_doc.py` }
+  });
+  if (autoBash.structuredContent.exitCode !== 0 || autoBash.structuredContent.auto_commit?.status !== 'pending' || !autoBash.structuredContent.auto_commit?.files?.includes?.('docs/from-bash.md')) {
+    throw new Error(`bash did not queue a generated document: ${JSON.stringify(autoBash.structuredContent)}`);
+  }
+  const autoBashPending = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
+  if (autoBashPending.structuredContent.auto_commit?.status !== 'pending' || !autoBashPending.structuredContent.auto_commit?.files?.includes?.('docs/from-bash.md')) {
+    throw new Error(`show_changes did not report bash-generated pending document: ${JSON.stringify(autoBashPending.structuredContent.auto_commit)}`);
+  }
+  await sleep(900);
+  if (gitSmoke(['status', '--short', '--', 'docs/from-bash.md']).trim()) throw new Error('idle auto-commit did not flush bash-generated document');
+}
+const autoMoveSource = await autoCommitClient.request('tools/call', {
+  name: 'write',
+  arguments: { workspace_id: autoWs, path: 'docs/to-move.md', content: '# Move me\n' }
+});
+if (autoMoveSource.structuredContent.auto_commit?.status !== 'pending') {
+  throw new Error(`setup write for auto move did not queue: ${JSON.stringify(autoMoveSource.structuredContent.auto_commit)}`);
+}
+const autoMoveSourceFlush = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
+if (autoMoveSourceFlush.structuredContent.auto_commit?.status !== 'pending') {
+  throw new Error(`setup write for auto move was not pending: ${JSON.stringify(autoMoveSourceFlush.structuredContent.auto_commit)}`);
+}
+await sleep(900);
+if (gitSmoke(['status', '--short', '--', 'docs/to-move.md']).trim()) throw new Error('idle auto-commit did not flush move setup document');
+const autoMove = await autoCommitClient.request('tools/call', {
+  name: 'move',
+  arguments: { workspace_id: autoWs, from_path: 'docs/to-move.md', to_path: 'docs/moved.md' }
+});
+if (autoMove.structuredContent.auto_commit?.status !== 'pending' || !autoMove.structuredContent.auto_commit?.files?.includes?.('docs/to-move.md') || !autoMove.structuredContent.auto_commit?.files?.includes?.('docs/moved.md')) {
+  throw new Error(`move did not queue both sides of a document rename: ${JSON.stringify(autoMove.structuredContent.auto_commit)}`);
+}
+const autoMoveFlush = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
+if (autoMoveFlush.structuredContent.auto_commit?.status !== 'pending' || !autoMoveFlush.structuredContent.auto_commit?.files?.includes?.('docs/to-move.md') || !autoMoveFlush.structuredContent.auto_commit?.files?.includes?.('docs/moved.md')) {
+  throw new Error(`show_changes did not report both sides of a pending document rename: ${JSON.stringify(autoMoveFlush.structuredContent.auto_commit)}`);
+}
+await sleep(900);
+if (gitSmoke(['status', '--short', '--', 'docs/to-move.md', 'docs/moved.md']).trim()) {
+  throw new Error('auto-committed document move remained dirty');
+}
+autoCommitClient.close();
 const exported = await client.request('tools/call', { name: 'export_pro_context', arguments: { workspace_id: ws, selected_paths: ['demo.txt'], max_files: 4, max_total_bytes: 80000 } });
 if (exported.structuredContent.path !== '.ai-bridge/pro-context.md') throw new Error('export_pro_context wrote an unexpected path');
 if (!exported.structuredContent.files_included?.includes('demo.txt')) {

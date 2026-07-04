@@ -1597,11 +1597,14 @@ async function main(): Promise<void> {
       requireBashSession: config.requireBashSession,
       codexSessions: config.codexSessions,
       writeMode: config.writeMode,
-            toolMode: config.toolMode,
-            toolCards: config.toolCards,
-            safePythonWorkspace: config.safePythonWorkspace,
-            safePythonScripts: config.safePythonScripts,
-            widgetDomain: config.widgetDomain,
+      toolMode: config.toolMode,
+      toolCards: config.toolCards,
+      safePythonWorkspace: config.safePythonWorkspace,
+      safePythonScripts: config.safePythonScripts,
+      autoCommitDocs: config.autoCommitDocs,
+      autoCommitDocExtensions: config.autoCommitDocExtensions,
+      autoCommitDocsIdleMs: config.autoCommitDocsIdleMs,
+      widgetDomain: config.widgetDomain,
       contextDir: config.contextDir,
       authEnabled: Boolean(config.authToken),
       authRequired: Boolean(config.authToken)
@@ -1737,6 +1740,7 @@ async function main(): Promise<void> {
     console.error(`[CodexPro] allowedRoots=${config.allowedRoots.join(", ")}`);
     console.error(`[CodexPro] bashMode=${config.bashMode}`);
     console.error(`[CodexPro] writeMode=${config.writeMode}`);
+    console.error(`[CodexPro] autoCommitDocs=${config.autoCommitDocs ? "on" : "off"}`);
     console.error(`[CodexPro] toolCards=${config.toolCards ? "on" : "off"}`);
     console.error(`[CodexPro] widgetDomain=${config.widgetDomain || "OpenAI sandbox"}`);
   });
