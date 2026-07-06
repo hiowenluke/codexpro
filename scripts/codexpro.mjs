@@ -101,6 +101,8 @@ Options:
   --cloudflare-token-file <path>
                              File containing a Cloudflare Tunnel token.
   --cloudflare-config <path> cloudflared YAML config for a named tunnel.
+  --cloudflare-protocol <auto|http2|quic>
+                             cloudflared edge protocol. Default: http2 for stable MCP streams.
   --token <token>           Bearer token for HTTP MCP. Auto-generated for tunnels.
   --cloudflared <path>      cloudflared executable. Default: PATH, then ~/.codexpro/bin.
   --ngrok <path>            ngrok executable. Default: PATH.
@@ -399,6 +401,14 @@ function writeOption(args, profile, mode) {
 function validateChoice(flag, value, allowed) {
   if (allowed.includes(value)) return value;
   throw new Error(`--${flag} must be ${allowed.slice(0, -1).join(', ')}, or ${allowed.at(-1)}`);
+}
+
+function cloudflareProtocolOption(args, profile = {}) {
+  return validateChoice(
+    'cloudflare-protocol',
+    optionValue(args, profile, 'cloudflareProtocol', ['CODEXPRO_CLOUDFLARE_PROTOCOL', 'CLOUDFLARE_TUNNEL_PROTOCOL'], 'http2'),
+    ['auto', 'http2', 'quic']
+  );
 }
 
 function optionalChoice(flag, value, allowed) {
@@ -3436,6 +3446,9 @@ async function main() {
   const toolMode = optionValue(args, profile, 'toolMode', ['CODEXPRO_TOOL_MODE'], 'standard');
   const widgetDomain = optionValue(args, profile, 'widgetDomain', ['CODEXPRO_WIDGET_DOMAIN'], '');
   const toolCards = optionBool(args, profile, 'toolCards', ['CODEXPRO_TOOL_CARDS'], false);
+  const cloudflareProtocol = tunnel === 'cloudflare' || tunnel === 'cloudflare-named'
+    ? cloudflareProtocolOption(args, profile)
+    : '';
   validateChoice('bash', bash, ['off', 'safe', 'full']);
   validateChoice('write', write, ['off', 'handoff', 'workspace']);
   validateChoice('tool-mode', toolMode, ['minimal', 'standard', 'full']);
@@ -3500,7 +3513,8 @@ async function main() {
           : tunnel === 'ngrok'
             ? `ngrok endpoint for ${stableHostname}`
             : 'none'
-    )
+    ),
+    ...(cloudflareProtocol ? [labelValue('Tunnel proto', cloudflareProtocol)] : [])
   ]);
 
   const verboseLogs = Boolean(args.logRequests || process.env.CODEXPRO_LOG_REQUESTS === '1');
@@ -3625,7 +3639,7 @@ async function main() {
 
   if (tunnel === 'cloudflare') {
     statusLine('wait', 'Opening Cloudflare quick tunnel');
-    cloudflared = spawnLogged('cloudflared', cloudflaredPath, ['tunnel', '--url', localBase], { cwd: root, env: process.env, verbose: verboseLogs });
+    cloudflared = spawnLogged('cloudflared', cloudflaredPath, ['--protocol', cloudflareProtocol, 'tunnel', '--url', localBase], { cwd: root, env: process.env, verbose: verboseLogs });
     const publicBase = await waitForCloudflareUrl(cloudflared);
     const details = printConnectorBlock(`${publicBase}/mcp`, token, {
       localBase,
@@ -3652,7 +3666,7 @@ async function main() {
   const cloudflareTokenFile = resolveConfigPath(root, optionValue(args, profile, 'cloudflareTokenFile', ['CLOUDFLARE_TUNNEL_TOKEN_FILE', 'CODEXPRO_CLOUDFLARE_TUNNEL_TOKEN_FILE'], ''));
   const cloudflareToken = optionValue(args, profile, 'cloudflareToken', ['CLOUDFLARE_TUNNEL_TOKEN', 'CODEXPRO_CLOUDFLARE_TUNNEL_TOKEN'], '');
 
-  const cloudflaredArgs = ['tunnel'];
+  const cloudflaredArgs = ['--protocol', cloudflareProtocol, 'tunnel'];
   if (cloudflareConfig) {
     cloudflaredArgs.push('--config', cloudflareConfig, 'run');
     if (tunnelName) cloudflaredArgs.push(tunnelName);

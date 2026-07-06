@@ -170,6 +170,18 @@ async function expectSessionNotFound(response, label) {
   }
 }
 
+async function expectStandaloneGetUnsupported(response, label) {
+  const body = await response.json();
+  if (
+    response.status !== 405 ||
+    response.headers.get('allow') !== 'POST' ||
+    !response.headers.get('content-type')?.includes('application/json') ||
+    body.error?.code !== -32000
+  ) {
+    throw new Error(`expected ${label} to return JSON-RPC 405, got ${response.status} ${JSON.stringify(body)}`);
+  }
+}
+
 function postToolsListWithSession(baseUrl, token, sessionId) {
   return fetch(`${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`, {
     method: 'POST',
@@ -180,6 +192,55 @@ function postToolsListWithSession(baseUrl, token, sessionId) {
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: 404, method: 'tools/list', params: {} })
   });
+}
+
+function rawMcpPost(baseUrl, token, message, sessionId) {
+  const headers = {
+    accept: 'application/json, text/event-stream',
+    'content-type': 'application/json'
+  };
+  if (sessionId) headers['mcp-session-id'] = sessionId;
+  return fetch(`${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(message)
+  });
+}
+
+async function readMcpResponseText(response) {
+  const text = await response.text();
+  const match = text.match(/data: (.+)/);
+  return match?.[1] ?? text;
+}
+
+async function initializeRawSession(baseUrl, token, sessionId) {
+  const response = await rawMcpPost(baseUrl, token, {
+    jsonrpc: '2.0',
+    id: 501,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: { name: 'codexpro-http-smoke-raw', version: '0.0.0' }
+    }
+  }, sessionId);
+  const bodyText = await readMcpResponseText(response);
+  const newSessionId = response.headers.get('mcp-session-id');
+  if (response.status !== 200 || !newSessionId || !bodyText.includes('"result"')) {
+    throw new Error(`expected raw initialize to succeed, got ${response.status} session=${newSessionId ?? ''} body=${bodyText}`);
+  }
+  return newSessionId;
+}
+
+async function sendInitializedNotification(baseUrl, token, sessionId) {
+  const response = await rawMcpPost(baseUrl, token, {
+    jsonrpc: '2.0',
+    method: 'notifications/initialized',
+    params: {}
+  }, sessionId);
+  if (response.status !== 202) {
+    throw new Error(`expected initialized notification to return 202, got ${response.status} ${await response.text()}`);
+  }
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codexpro-http-smoke-'));
@@ -461,8 +522,11 @@ try {
 
   const mcpUrl = `${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`;
   const unknownSession = '00000000-0000-4000-8000-000000000000';
+  await expectStandaloneGetUnsupported(await fetch(mcpUrl, {
+    headers: { accept: 'text/event-stream' }
+  }), 'GET before initialize');
   await expectSessionNotFound(await postToolsListWithSession(baseUrl, token, unknownSession), 'unknown POST session');
-  await expectSessionNotFound(await fetch(`${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`, {
+  await expectStandaloneGetUnsupported(await fetch(`${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`, {
     headers: {
       accept: 'text/event-stream',
       'mcp-session-id': unknownSession
@@ -475,6 +539,18 @@ try {
     await transport.terminateSession();
     await expectSessionNotFound(await postToolsListWithSession(baseUrl, token, staleSession), 'stale POST session');
   });
+  const freshSessionFromStaleInitialize = await initializeRawSession(baseUrl, token, unknownSession);
+  if (freshSessionFromStaleInitialize === unknownSession) {
+    throw new Error('initialize with a stale session header reused the stale session id');
+  }
+  const doubleGetSession = await initializeRawSession(baseUrl, token);
+  await sendInitializedNotification(baseUrl, token, doubleGetSession);
+  await expectStandaloneGetUnsupported(await fetch(mcpUrl, {
+    headers: {
+      accept: 'text/event-stream',
+      'mcp-session-id': doubleGetSession
+    }
+  }), 'standalone GET after initialize');
 
   await withClient(mcpUrl, async (client) => {
     const resources = await client.listResources();

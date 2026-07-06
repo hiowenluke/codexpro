@@ -1574,6 +1574,47 @@ async function main(): Promise<void> {
     return record.transport;
   }
 
+  async function createSessionTransport(): Promise<StreamableHTTPServerTransport> {
+    let transport!: StreamableHTTPServerTransport;
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (newSessionId: string) => {
+        pruneTransports();
+        transports.set(newSessionId, {
+          transport,
+          createdAt: Date.now(),
+          lastSeenAt: Date.now()
+        });
+        pruneTransports();
+      }
+    } as any);
+
+    (transport as any).onclose = () => {
+      const closedSessionId = (transport as any).sessionId;
+      if (closedSessionId) transports.delete(closedSessionId);
+    };
+    (transport as any).onerror = (error: unknown) => {
+      if (!logRequests) return;
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[CodexPro] MCP transport error: ${redactSensitiveText(message)}`);
+    };
+
+    const server = createCodexProServer(config);
+    await server.connect(transport);
+    return transport;
+  }
+
+  function sendStandaloneSseUnsupported(res: Response): void {
+    res
+      .status(405)
+      .setHeader("Allow", "POST")
+      .json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Method Not Allowed: standalone MCP SSE streams are not enabled; use POST streamable HTTP" },
+        id: null
+      });
+  }
+
   const pruneTimer = setInterval(pruneTransports, Math.min(config.httpSessionTtlMs, 60_000));
   pruneTimer.unref();
 
@@ -1648,27 +1689,8 @@ async function main(): Promise<void> {
       const existingTransport = getTransport(sessionId);
       if (existingTransport) {
         transport = existingTransport;
-      } else if (!sessionId && isInitializeRequest(req.body)) {
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (newSessionId: string) => {
-            pruneTransports();
-            transports.set(newSessionId, {
-              transport,
-              createdAt: Date.now(),
-              lastSeenAt: Date.now()
-            });
-            pruneTransports();
-          }
-        } as any);
-
-        (transport as any).onclose = () => {
-          const closedSessionId = (transport as any).sessionId;
-          if (closedSessionId) transports.delete(closedSessionId);
-        };
-
-        const server = createCodexProServer(config);
-        await server.connect(transport);
+      } else if (isInitializeRequest(req.body)) {
+        transport = await createSessionTransport();
       } else {
         sendSessionError(res, sessionId);
         return;
@@ -1689,6 +1711,10 @@ async function main(): Promise<void> {
 
   const handleSessionRequest = async (req: express.Request, res: express.Response) => {
     const sessionId = requestSessionId(req);
+    if (req.method === "GET") {
+      sendStandaloneSseUnsupported(res);
+      return;
+    }
     const transport = getTransport(sessionId);
     if (!transport) {
       sendSessionError(res, sessionId);
