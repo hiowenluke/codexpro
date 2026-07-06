@@ -260,7 +260,7 @@ export class AutoCommitBatcher {
       enabled: true,
       status: "pending",
       files: [...batch.files].sort(),
-      reason: `Queued for one batched document commit. It will flush on show_changes or after ${this.config.autoCommitDocsIdleMs} ms of MCP session idle time.`
+      reason: `Queued for one batched document commit. It will commit when show_changes runs or after ${this.config.autoCommitDocsIdleMs} ms of MCP session idle time.`
     };
   }
 

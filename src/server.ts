@@ -1958,7 +1958,7 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
           ? diffBlock(diff)
           : "\n\nNo diff output."
         : "\n\nDiff omitted by request.";
-      const autoCommit = autoCommitBatcher.touch(workspace);
+      const autoCommit = autoCommitBatcher.flush(workspace);
       const text = `# Show Changes\n\nWorkspace: ${workspace.root}\n\n## Changed\n\n${changedText}\n\n## Diff stats\n\n+${stats.additions} -${stats.deletions}${diffText}`;
       return textResult(appendAutoCommitText(text, autoCommit), {
         workspace_id: workspace.id,

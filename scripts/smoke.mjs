@@ -612,7 +612,12 @@ await autoCommitClient.request('initialize', {
 });
 autoCommitClient.notify('notifications/initialized');
 const autoConfig = await autoCommitClient.request('tools/call', { name: 'server_config', arguments: {} });
-if (autoConfig.structuredContent.autoCommitDocs !== true || autoConfig.structuredContent.autoCommitDocsIdleMs !== 500 || !autoConfig.structuredContent.autoCommitDocExtensions?.includes?.('.md')) {
+if (
+  autoConfig.structuredContent.autoCommitDocs !== true ||
+  autoConfig.structuredContent.autoCommitDocsIdleMs !== 500 ||
+  !autoConfig.structuredContent.autoCommitDocExtensions?.includes?.('.md') ||
+  !autoConfig.structuredContent.autoCommitDocExtensions?.includes?.('.json')
+) {
   throw new Error(`server_config did not expose auto commit docs config: ${JSON.stringify(autoConfig.structuredContent)}`);
 }
 const autoOpened = await autoCommitClient.request('tools/call', { name: 'open_current_workspace', arguments: { include_tree: false } });
@@ -661,12 +666,11 @@ for (const expected of ['docs/auto-commit.md', 'docs/second.md', 'docs/preexisti
     throw new Error(`show_changes auto-commit omitted ${expected}: ${JSON.stringify(autoFlush.structuredContent.auto_commit)}`);
   }
 }
-if (autoFlush.structuredContent.auto_commit?.status !== 'pending') {
-  throw new Error(`show_changes should report the pending batch without committing it: ${JSON.stringify(autoFlush.structuredContent.auto_commit)}`);
+if (autoFlush.structuredContent.auto_commit?.status !== 'committed') {
+  throw new Error(`show_changes should commit the pending batch: ${JSON.stringify(autoFlush.structuredContent.auto_commit)}`);
 }
-await sleep(900);
 if (gitSmoke(['status', '--short', '--', 'docs/auto-commit.md', 'docs/second.md', 'docs/preexisting.md']).trim()) {
-  throw new Error('idle-flushed documents remained dirty');
+  throw new Error('show_changes-committed documents remained dirty');
 }
 if (!gitSmoke(['log', '--oneline', '-1']).includes('docs: auto-commit 3 document files')) {
   throw new Error('batched auto-commit did not create the expected commit message');
@@ -679,12 +683,11 @@ if (pythonCommand) {
   if (autoBash.structuredContent.exitCode !== 0 || autoBash.structuredContent.auto_commit?.status !== 'pending' || !autoBash.structuredContent.auto_commit?.files?.includes?.('docs/from-bash.md')) {
     throw new Error(`bash did not queue a generated document: ${JSON.stringify(autoBash.structuredContent)}`);
   }
-  const autoBashPending = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
-  if (autoBashPending.structuredContent.auto_commit?.status !== 'pending' || !autoBashPending.structuredContent.auto_commit?.files?.includes?.('docs/from-bash.md')) {
-    throw new Error(`show_changes did not report bash-generated pending document: ${JSON.stringify(autoBashPending.structuredContent.auto_commit)}`);
+  const autoBashCommitted = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
+  if (autoBashCommitted.structuredContent.auto_commit?.status !== 'committed' || !autoBashCommitted.structuredContent.auto_commit?.files?.includes?.('docs/from-bash.md')) {
+    throw new Error(`show_changes did not commit bash-generated pending document: ${JSON.stringify(autoBashCommitted.structuredContent.auto_commit)}`);
   }
-  await sleep(900);
-  if (gitSmoke(['status', '--short', '--', 'docs/from-bash.md']).trim()) throw new Error('idle auto-commit did not flush bash-generated document');
+  if (gitSmoke(['status', '--short', '--', 'docs/from-bash.md']).trim()) throw new Error('show_changes did not commit bash-generated document');
 }
 const autoMoveSource = await autoCommitClient.request('tools/call', {
   name: 'write',
@@ -694,11 +697,10 @@ if (autoMoveSource.structuredContent.auto_commit?.status !== 'pending') {
   throw new Error(`setup write for auto move did not queue: ${JSON.stringify(autoMoveSource.structuredContent.auto_commit)}`);
 }
 const autoMoveSourceFlush = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
-if (autoMoveSourceFlush.structuredContent.auto_commit?.status !== 'pending') {
-  throw new Error(`setup write for auto move was not pending: ${JSON.stringify(autoMoveSourceFlush.structuredContent.auto_commit)}`);
+if (autoMoveSourceFlush.structuredContent.auto_commit?.status !== 'committed') {
+  throw new Error(`setup write for auto move was not committed: ${JSON.stringify(autoMoveSourceFlush.structuredContent.auto_commit)}`);
 }
-await sleep(900);
-if (gitSmoke(['status', '--short', '--', 'docs/to-move.md']).trim()) throw new Error('idle auto-commit did not flush move setup document');
+if (gitSmoke(['status', '--short', '--', 'docs/to-move.md']).trim()) throw new Error('show_changes did not commit move setup document');
 const autoMove = await autoCommitClient.request('tools/call', {
   name: 'move',
   arguments: { workspace_id: autoWs, from_path: 'docs/to-move.md', to_path: 'docs/moved.md' }
@@ -707,10 +709,9 @@ if (autoMove.structuredContent.auto_commit?.status !== 'pending' || !autoMove.st
   throw new Error(`move did not queue both sides of a document rename: ${JSON.stringify(autoMove.structuredContent.auto_commit)}`);
 }
 const autoMoveFlush = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
-if (autoMoveFlush.structuredContent.auto_commit?.status !== 'pending' || !autoMoveFlush.structuredContent.auto_commit?.files?.includes?.('docs/to-move.md') || !autoMoveFlush.structuredContent.auto_commit?.files?.includes?.('docs/moved.md')) {
-  throw new Error(`show_changes did not report both sides of a pending document rename: ${JSON.stringify(autoMoveFlush.structuredContent.auto_commit)}`);
+if (autoMoveFlush.structuredContent.auto_commit?.status !== 'committed' || !autoMoveFlush.structuredContent.auto_commit?.files?.includes?.('docs/to-move.md') || !autoMoveFlush.structuredContent.auto_commit?.files?.includes?.('docs/moved.md')) {
+  throw new Error(`show_changes did not commit both sides of a document rename: ${JSON.stringify(autoMoveFlush.structuredContent.auto_commit)}`);
 }
-await sleep(900);
 if (gitSmoke(['status', '--short', '--', 'docs/to-move.md', 'docs/moved.md']).trim()) {
   throw new Error('auto-committed document move remained dirty');
 }
