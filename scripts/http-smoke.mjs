@@ -188,13 +188,17 @@ async function expectStandaloneGetReady(response, label) {
   }
   const reader = response.body.getReader();
   try {
-    const chunk = await Promise.race([
-      reader.read(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} did not emit an SSE heartbeat`)), 2000))
-    ]);
-    const text = new TextDecoder().decode(chunk.value ?? new Uint8Array());
-    if (chunk.done || !text.includes(': codexpro connected')) {
-      throw new Error(`expected ${label} to emit an SSE heartbeat, got ${JSON.stringify(text)}`);
+    let text = '';
+    for (let i = 0; i < 3 && !text.includes('notifications/message'); i += 1) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} did not emit an SSE heartbeat`)), 2000))
+      ]);
+      if (chunk.done) break;
+      text += new TextDecoder().decode(chunk.value ?? new Uint8Array());
+    }
+    if (!text.includes(': codexpro connected') || !text.includes('event: message') || !text.includes('notifications/message')) {
+      throw new Error(`expected ${label} to emit an SSE MCP heartbeat, got ${JSON.stringify(text)}`);
     }
   } finally {
     await reader.cancel().catch(() => {});

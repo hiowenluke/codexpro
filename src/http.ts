@@ -1622,15 +1622,29 @@ async function main(): Promise<void> {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
 
-    const writeHeartbeat = (label: string): void => {
+    const writeChunk = (chunk: string): void => {
       if (res.destroyed || res.writableEnded) return;
       try {
-        res.write(`: codexpro ${label}\n\n`);
+        res.write(chunk);
       } catch {
         cleanup();
       }
     };
-    const heartbeat = setInterval(() => writeHeartbeat("keepalive"), 15_000);
+    const writeHeartbeat = (label: string): void => {
+      writeChunk(`: codexpro ${label}\n\n`);
+    };
+    const writeConnectedNotification = (): void => {
+      writeChunk(`event: message\ndata: ${JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/message",
+        params: {
+          level: "info",
+          logger: "codexpro",
+          data: "connected"
+        }
+      })}\n\n`);
+    };
+    const heartbeat = setInterval(() => writeHeartbeat("keepalive"), 5_000);
     heartbeat.unref();
     const cleanup = (): void => {
       clearInterval(heartbeat);
@@ -1638,6 +1652,7 @@ async function main(): Promise<void> {
     req.on("close", cleanup);
     res.on("close", cleanup);
     writeHeartbeat("connected");
+    writeConnectedNotification();
   }
 
   const pruneTimer = setInterval(pruneTransports, Math.min(config.httpSessionTtlMs, 60_000));
