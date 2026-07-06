@@ -182,6 +182,25 @@ async function expectStandaloneGetUnsupported(response, label) {
   }
 }
 
+async function expectStandaloneGetReady(response, label) {
+  if (response.status !== 200 || !response.headers.get('content-type')?.includes('text/event-stream') || !response.body) {
+    throw new Error(`expected ${label} to return SSE 200, got ${response.status} ${await response.text()}`);
+  }
+  const reader = response.body.getReader();
+  try {
+    const chunk = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} did not emit an SSE heartbeat`)), 2000))
+    ]);
+    const text = new TextDecoder().decode(chunk.value ?? new Uint8Array());
+    if (chunk.done || !text.includes(': codexpro connected')) {
+      throw new Error(`expected ${label} to emit an SSE heartbeat, got ${JSON.stringify(text)}`);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
 function postToolsListWithSession(baseUrl, token, sessionId) {
   return fetch(`${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`, {
     method: 'POST',
@@ -526,7 +545,7 @@ try {
     headers: { accept: 'text/event-stream' }
   }), 'GET before initialize');
   await expectSessionNotFound(await postToolsListWithSession(baseUrl, token, unknownSession), 'unknown POST session');
-  await expectStandaloneGetUnsupported(await fetch(`${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`, {
+  await expectSessionNotFound(await fetch(`${baseUrl}/mcp?codexpro_token=${encodeURIComponent(token)}`, {
     headers: {
       accept: 'text/event-stream',
       'mcp-session-id': unknownSession
@@ -545,12 +564,18 @@ try {
   }
   const doubleGetSession = await initializeRawSession(baseUrl, token);
   await sendInitializedNotification(baseUrl, token, doubleGetSession);
-  await expectStandaloneGetUnsupported(await fetch(mcpUrl, {
+  await expectStandaloneGetReady(await fetch(mcpUrl, {
     headers: {
       accept: 'text/event-stream',
       'mcp-session-id': doubleGetSession
     }
   }), 'standalone GET after initialize');
+  await expectStandaloneGetReady(await fetch(mcpUrl, {
+    headers: {
+      accept: 'text/event-stream',
+      'mcp-session-id': doubleGetSession
+    }
+  }), 'repeated standalone GET after initialize');
 
   await withClient(mcpUrl, async (client) => {
     const resources = await client.listResources();

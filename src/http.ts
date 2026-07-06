@@ -1604,15 +1604,40 @@ async function main(): Promise<void> {
     return transport;
   }
 
-  function sendStandaloneSseUnsupported(res: Response): void {
+  function sendGetWithoutSession(res: Response): void {
     res
       .status(405)
       .setHeader("Allow", "POST")
       .json({
         jsonrpc: "2.0",
-        error: { code: -32000, message: "Method Not Allowed: standalone MCP SSE streams are not enabled; use POST streamable HTTP" },
+        error: { code: -32000, message: "Method Not Allowed: initialize with POST before opening an MCP SSE stream" },
         id: null
       });
+  }
+
+  function openStandaloneSseHeartbeat(req: Request, res: Response): void {
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders?.();
+
+    const writeHeartbeat = (label: string): void => {
+      if (res.destroyed || res.writableEnded) return;
+      try {
+        res.write(`: codexpro ${label}\n\n`);
+      } catch {
+        cleanup();
+      }
+    };
+    const heartbeat = setInterval(() => writeHeartbeat("keepalive"), 15_000);
+    heartbeat.unref();
+    const cleanup = (): void => {
+      clearInterval(heartbeat);
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+    writeHeartbeat("connected");
   }
 
   const pruneTimer = setInterval(pruneTransports, Math.min(config.httpSessionTtlMs, 60_000));
@@ -1712,7 +1737,16 @@ async function main(): Promise<void> {
   const handleSessionRequest = async (req: express.Request, res: express.Response) => {
     const sessionId = requestSessionId(req);
     if (req.method === "GET") {
-      sendStandaloneSseUnsupported(res);
+      if (!sessionId) {
+        sendGetWithoutSession(res);
+        return;
+      }
+      const transport = getTransport(sessionId);
+      if (!transport) {
+        sendSessionError(res, sessionId);
+        return;
+      }
+      openStandaloneSseHeartbeat(req, res);
       return;
     }
     const transport = getTransport(sessionId);
