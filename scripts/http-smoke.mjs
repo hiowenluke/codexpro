@@ -532,8 +532,11 @@ try {
   }
   const toolCardUri = 'ui://widget/codexpro-tool-card-v9.html';
   for (const visualTool of queryToolNames) {
-    if (hasWidgetMeta(queryTools, visualTool, toolCardUri) || hasToolCardStatusMeta(queryTools, visualTool)) {
+    if (hasWidgetMeta(queryTools, visualTool, toolCardUri)) {
       throw new Error(`${visualTool} exposed widget metadata while CODEXPRO_TOOL_CARDS is off`);
+    }
+    if (!hasToolCardStatusMeta(queryTools, visualTool)) {
+      throw new Error(`${visualTool} did not expose tool invocation status metadata`);
     }
   }
 

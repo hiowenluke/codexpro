@@ -133,9 +133,7 @@ function toolCardMeta(): Record<string, unknown> {
 
 const OPTIONAL_TOOL_CARD_META = [
   "ui",
-  "openai/outputTemplate",
-  "openai/toolInvocation/invoking",
-  "openai/toolInvocation/invoked"
+  "openai/outputTemplate"
 ] as const;
 
 function descriptorOptionsForConfig(config: CodexProConfig, options: Record<string, unknown>): Record<string, unknown> {

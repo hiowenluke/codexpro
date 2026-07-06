@@ -252,7 +252,8 @@ async function expectToolError(name, args, pattern, targetClient = client) {
   }
 }
 for (const visualTool of toolNames) {
-  if (hasWidgetMeta(visualTool) || hasToolCardStatusMeta(visualTool)) throw new Error(`${visualTool} exposed widget metadata while CODEXPRO_TOOL_CARDS is off`);
+  if (hasWidgetMeta(visualTool)) throw new Error(`${visualTool} exposed widget metadata while CODEXPRO_TOOL_CARDS is off`);
+  if (!hasToolCardStatusMeta(visualTool)) throw new Error(`${visualTool} did not expose tool invocation status metadata`);
 }
 const cardClient = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--bash', 'safe', '--tool-mode', 'full'], {
   cwd: path.resolve('.'),
