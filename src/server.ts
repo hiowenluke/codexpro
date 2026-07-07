@@ -147,9 +147,17 @@ function toolCallLoggingEnabled(): boolean {
   return process.env.CODEXPRO_LOG_TOOL_CALLS === "1" || process.env.CODEXPRO_LOG_REQUESTS === "1";
 }
 
-function logToolCall(name: string, status: "ok" | "error", started: number): void {
+function toolResultErrorText(result: any): string {
+  const structured = result?.structuredContent;
+  if (structured && typeof structured === "object" && typeof structured.error === "string") return structured.error;
+  const text = result?.content?.find?.((part: any) => part?.type === "text" && typeof part.text === "string")?.text;
+  return typeof text === "string" ? text : "";
+}
+
+function logToolCall(name: string, status: "ok" | "error", started: number, detail = ""): void {
   if (!toolCallLoggingEnabled()) return;
-  console.error(`[CodexProTool] ${name} ${status} ${Date.now() - started}ms`);
+  const suffix = detail ? ` ${redactSensitiveText(detail).replace(/\s+/g, " ").slice(0, 500)}` : "";
+  console.error(`[CodexProTool] ${name} ${status} ${Date.now() - started}ms${suffix}`);
 }
 
 function registerToolCardResource(server: McpServer, config: CodexProConfig): void {
@@ -278,11 +286,11 @@ function registerToolCompat(
     const started = Date.now();
     try {
       const result = tagToolResult(await handler(args ?? {}), name, options);
-      logToolCall(name, result?.isError ? "error" : "ok", started);
+      logToolCall(name, result?.isError ? "error" : "ok", started, result?.isError ? toolResultErrorText(result) : "");
       return result;
     } catch (error) {
       const result = tagToolResult(errorResult(error), name, options);
-      logToolCall(name, "error", started);
+      logToolCall(name, "error", started, errorText(error));
       return result;
     }
   };
@@ -442,7 +450,7 @@ function registerCodexTool(
 function serverInstructions(config: CodexProConfig): string {
   const editInstruction =
     config.writeMode === "workspace"
-      ? `4. Edit source files with write/edit/move. After all edits, call show_changes once for git status, diff stats, and review diff.${config.autoCommitDocs ? " Eligible document changes are queued and committed together after MCP tool calls go idle; show_changes reports the pending batch but does not commit it." : ""}`
+      ? `4. Edit source files with write/edit/move. After all edits, call show_changes once for git status, diff stats, and review diff.${config.autoCommitDocs ? " Eligible document changes are queued and committed together; show_changes finalizes the pending document commit, with the idle timer as a fallback." : ""}`
       : config.writeMode === "handoff"
         ? "4. Source writes are disabled and generic write/edit/move tools are unavailable. Use handoff_to_agent/handoff_to_codex for plans."
         : "4. Write/edit/move tools are disabled. Do not attempt direct file writes; use handoff or context export workflows instead.";
@@ -709,6 +717,7 @@ const SESSION_READ_ANNOTATIONS = { readOnlyHint: true, openWorldHint: false, des
 const LOCAL_WRITE_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: true, idempotentHint: false };
 const BASH_ANNOTATIONS = { readOnlyHint: false, openWorldHint: true, destructiveHint: true, idempotentHint: false };
 const HANDOFF_WRITE_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: false, idempotentHint: false };
+const AUTO_COMMIT_FINALIZE_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: false, idempotentHint: false };
 
 const workspaceManagers = new Map<string, WorkspaceManager>();
 const autoCommitBatchers = new Map<string, AutoCommitBatcher>();
@@ -1920,14 +1929,16 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
     "show_changes",
     {
       title: "Show Changes",
-      description: "Summarize the current workspace changes in one review-oriented result with git status, diff stats, and optional diff. Use this instead of bash git status, bash git diff, git_status, or git_diff when reviewing work.",
+      description: config.autoCommitDocs
+        ? "Summarize current workspace changes with git status, diff stats, and optional diff, then finalize any pending automatic document commit. Use this once after edits are complete."
+        : "Summarize the current workspace changes in one review-oriented result with git status, diff stats, and optional diff. Use this instead of bash git status, bash git diff, git_status, or git_diff when reviewing work.",
       inputSchema: {
         workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use default workspace."),
         path: z.string().optional().describe("Optional file path relative to workspace root."),
         staged: z.boolean().optional().describe("Show staged diff. Default: false."),
         include_diff: z.boolean().optional().describe("Include the unified diff. Default: true.")
       },
-      annotations: READ_ONLY_ANNOTATIONS,
+      annotations: config.autoCommitDocs ? AUTO_COMMIT_FINALIZE_ANNOTATIONS : READ_ONLY_ANNOTATIONS,
       _meta: {
         ...toolCardMeta(),
         "openai/toolInvocation/invoking": "Summarizing workspace changes...",

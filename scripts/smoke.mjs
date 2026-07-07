@@ -620,6 +620,11 @@ if (
 ) {
   throw new Error(`server_config did not expose auto commit docs config: ${JSON.stringify(autoConfig.structuredContent)}`);
 }
+const autoTools = await autoCommitClient.request('tools/list', {});
+const autoShowChanges = autoTools.tools.find((tool) => tool.name === 'show_changes');
+if (autoShowChanges?.annotations?.readOnlyHint !== false || autoShowChanges?.annotations?.destructiveHint !== false) {
+  throw new Error(`show_changes must not be read-only when it finalizes auto-commit: ${JSON.stringify(autoShowChanges?.annotations)}`);
+}
 const autoOpened = await autoCommitClient.request('tools/call', { name: 'open_current_workspace', arguments: { include_tree: false } });
 const autoWs = autoOpened.structuredContent.workspace_id;
 const autoWrite = await autoCommitClient.request('tools/call', {
