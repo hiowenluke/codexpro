@@ -714,8 +714,8 @@ async function writeAgentHandoff(
 
 const READ_ONLY_ANNOTATIONS = { readOnlyHint: true, openWorldHint: false, destructiveHint: false };
 const SESSION_READ_ANNOTATIONS = { readOnlyHint: true, openWorldHint: false, destructiveHint: false, idempotentHint: false };
-const LOCAL_WRITE_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: true, idempotentHint: false };
-const BASH_ANNOTATIONS = { readOnlyHint: false, openWorldHint: true, destructiveHint: true, idempotentHint: false };
+const LOCAL_WRITE_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: false, idempotentHint: false };
+const BASH_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: false, idempotentHint: false };
 const HANDOFF_WRITE_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: false, idempotentHint: false };
 const AUTO_COMMIT_FINALIZE_ANNOTATIONS = { readOnlyHint: false, openWorldHint: false, destructiveHint: false, idempotentHint: false };
 
@@ -1638,13 +1638,13 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
     "write",
     {
       title: "Write File",
-      description: "Create or overwrite a meaningful text file inside the workspace. Returns a unified diff; do not create empty placeholder files.",
+      description: "Create a meaningful text file inside the workspace, or overwrite only when overwrite=true is explicit. Returns a unified diff; do not create empty placeholder files.",
       inputSchema: {
         workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use default workspace."),
         path: z.string().describe("File path relative to workspace root."),
         content: z.string().describe("Complete file contents to write."),
         create_dirs: z.boolean().optional().describe("Create parent directories if missing. Default: true."),
-        overwrite: z.boolean().optional().describe("Allow overwriting existing files. Default: true.")
+        overwrite: z.boolean().optional().describe("Allow overwriting existing files. Default: false.")
       },
       annotations: LOCAL_WRITE_ANNOTATIONS,
       _meta: {
@@ -1660,7 +1660,7 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
       const autoCommitBefore = captureAutoCommitSnapshot(config, workspace);
       const result = await writeTextFile(config, guard, workspace, args.path, String(args.content ?? ""), {
         createDirs: args.create_dirs !== false,
-        overwrite: args.overwrite !== false
+        overwrite: parseBool(args.overwrite, false)
       });
       const autoCommit = autoCommitBatcher.queue(workspace, autoCommitBefore, [result.path], {
         includePreexistingDirtyCandidates: Boolean(result.diff.diff.trim())

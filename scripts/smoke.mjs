@@ -241,6 +241,12 @@ function hasToolCardStatusMeta(name) {
   const meta = toolsByName.get(name)?._meta ?? {};
   return Boolean(meta['openai/toolInvocation/invoking'] || meta['openai/toolInvocation/invoked']);
 }
+for (const localMutationTool of ['write', 'edit', 'move', 'bash']) {
+  const annotations = toolsByName.get(localMutationTool)?.annotations;
+  if (annotations?.readOnlyHint !== false || annotations?.destructiveHint !== false || annotations?.openWorldHint !== false) {
+    throw new Error(`${localMutationTool} annotations may trigger ChatGPT safety blocking: ${JSON.stringify(annotations)}`);
+  }
+}
 async function expectToolError(name, args, pattern, targetClient = client) {
   const result = await targetClient.request('tools/call', { name, arguments: args });
   if (!result.isError) {
@@ -443,6 +449,16 @@ await client.request('tools/call', {
     workspace_id: ws,
     path: 'env-ref.js',
     content: 'const TOKEN = process.env.TOKEN;\nconst OPENAI_API_KEY = process.env.OPENAI_API_KEY;\nconst apiToken = getToken();\n'
+  }
+});
+await expectToolError('write', { workspace_id: ws, path: 'env-ref.js', content: 'overwrite without explicit opt-in\n' }, /overwrite=false/);
+await client.request('tools/call', {
+  name: 'write',
+  arguments: {
+    workspace_id: ws,
+    path: 'env-ref.js',
+    content: 'const TOKEN = process.env.TOKEN;\nconst OPENAI_API_KEY = process.env.OPENAI_API_KEY;\nconst apiToken = getToken();\n',
+    overwrite: true
   }
 });
 const envRefRead = await client.request('tools/call', { name: 'read', arguments: { workspace_id: ws, path: 'env-ref.js' } });

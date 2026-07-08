@@ -188,7 +188,7 @@ Standard mode exposes:
 - `read` — read text files with line numbers.
 - `read_image` — read a local workspace image as MCP image content. Supports PNG, JPEG, GIF, and WebP, capped by `CODEXPRO_MAX_IMAGE_BYTES`.
 - `read_images` — read multiple local workspace images, or supported images in a specified folder, as MCP image content. Default cap: 10 images and `CODEXPRO_MAX_IMAGE_BATCH_BYTES`.
-- `write` — create/overwrite files and return a diff. Advertised only when `CODEXPRO_WRITE_MODE=workspace`.
+- `write` — create files, or overwrite only with explicit `overwrite=true`, and return a diff. Advertised only when `CODEXPRO_WRITE_MODE=workspace`.
 - `edit` — exact text replacement and return a diff. Advertised only when `CODEXPRO_WRITE_MODE=workspace`.
 - `move` — move/rename one workspace file without shell `mv`. Advertised only when `CODEXPRO_WRITE_MODE=workspace`.
 - `bash` — run allowlisted shell commands in the workspace. Hidden when `CODEXPRO_BASH_MODE=off`.
