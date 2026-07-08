@@ -556,6 +556,10 @@ const pythonCommand = ['python3', 'python'].find((command) =>
   spawnSync(process.platform === 'win32' ? 'where' : 'sh', process.platform === 'win32' ? [command] : ['-lc', `command -v ${command} >/dev/null 2>&1`]).status === 0
 );
 if (pythonCommand) {
+  const safePythonVersion = await client.request('tools/call', { name: 'bash', arguments: { workspace_id: ws, command: `${pythonCommand} --version` } });
+  if (safePythonVersion.structuredContent.exitCode !== 0) {
+    throw new Error(`safe bash did not allow Python version check: ${JSON.stringify(safePythonVersion.structuredContent)}`);
+  }
   const pythonClient = new McpStdioClient('node', ['dist/stdio.js', '--root', tmp, '--allow-root', tmp, '--bash', 'safe'], {
     cwd: path.resolve('.'),
     env: {

@@ -121,12 +121,17 @@ function compact(command: string): string {
 function startsWithAllowedPrefix(config: CodexProConfig, guard: PathGuard, workspace: Workspace, cwdRelPath: string, command: string): boolean {
   const normalized = compact(command);
   return (
+    isAllowedVersionCommand(normalized) ||
     isAllowedPackageScript(normalized) ||
     isAllowedGitAdd(normalized) ||
     isAllowedGitCommit(normalized) ||
     isAllowedPythonScript(config, guard, workspace, cwdRelPath, normalized) ||
     SAFE_ALLOWED_PREFIXES.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix} `))
   );
+}
+
+function isAllowedVersionCommand(command: string): boolean {
+  return /^python(?:3(?:\.\d+)?)?\s+(?:--version|-V)$/.test(command);
 }
 
 function isAllowedPackageScript(command: string): boolean {
