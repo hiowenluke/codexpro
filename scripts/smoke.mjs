@@ -665,7 +665,14 @@ const autoPreexistingEdit = await autoCommitClient.request('tools/call', {
 if (autoPreexistingEdit.structuredContent.auto_commit?.status !== 'pending' || !autoPreexistingEdit.structuredContent.auto_commit?.files?.includes?.('docs/preexisting.md')) {
   throw new Error(`direct edit of a pre-existing dirty document was not queued: ${JSON.stringify(autoPreexistingEdit.structuredContent.auto_commit)}`);
 }
-const autoFlush = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
+const autoFlush = await autoCommitClient.request('tools/call', {
+  name: 'show_changes',
+  arguments: {
+    workspace_id: autoWs,
+    include_diff: false,
+    commit_summary: 'add automatic commit summary docs'
+  }
+});
 for (const expected of ['docs/auto-commit.md', 'docs/second.md', 'docs/preexisting.md']) {
   if (!autoFlush.structuredContent.auto_commit?.files?.includes?.(expected)) {
     throw new Error(`show_changes auto-commit omitted ${expected}: ${JSON.stringify(autoFlush.structuredContent.auto_commit)}`);
@@ -677,8 +684,8 @@ if (autoFlush.structuredContent.auto_commit?.status !== 'committed') {
 if (gitSmoke(['status', '--short', '--', 'docs/auto-commit.md', 'docs/second.md', 'docs/preexisting.md']).trim()) {
   throw new Error('show_changes-committed documents remained dirty');
 }
-if (!gitSmoke(['log', '--oneline', '-1']).includes('docs: auto-commit 3 document files')) {
-  throw new Error('batched auto-commit did not create the expected commit message');
+if (!gitSmoke(['log', '--oneline', '-1']).includes('docs: add automatic commit summary docs')) {
+  throw new Error('batched auto-commit did not create the provided commit summary');
 }
 if (pythonCommand) {
   const autoBash = await autoCommitClient.request('tools/call', {
@@ -704,6 +711,9 @@ if (autoMoveSource.structuredContent.auto_commit?.status !== 'pending') {
 const autoMoveSourceFlush = await autoCommitClient.request('tools/call', { name: 'show_changes', arguments: { workspace_id: autoWs, include_diff: false } });
 if (autoMoveSourceFlush.structuredContent.auto_commit?.status !== 'committed') {
   throw new Error(`setup write for auto move was not committed: ${JSON.stringify(autoMoveSourceFlush.structuredContent.auto_commit)}`);
+}
+if (/docs: auto-commit \d+ document files/.test(gitSmoke(['log', '--oneline', '-1']))) {
+  throw new Error('fallback auto-commit message used an uninformative file count');
 }
 if (gitSmoke(['status', '--short', '--', 'docs/to-move.md']).trim()) throw new Error('show_changes did not commit move setup document');
 const autoMove = await autoCommitClient.request('tools/call', {

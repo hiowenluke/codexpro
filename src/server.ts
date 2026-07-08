@@ -450,7 +450,7 @@ function registerCodexTool(
 function serverInstructions(config: CodexProConfig): string {
   const editInstruction =
     config.writeMode === "workspace"
-      ? `4. Edit source files with write/edit/move. After all edits, call show_changes once for git status, diff stats, and review diff.${config.autoCommitDocs ? " Eligible document changes are queued and committed together; show_changes finalizes the pending document commit, with the idle timer as a fallback." : ""}`
+      ? `4. Edit source files with write/edit/move. After all edits, call show_changes once for git status, diff stats, and review diff.${config.autoCommitDocs ? " Eligible document changes are queued and committed together; show_changes finalizes the pending document commit. Pass commit_summary as a concise English imperative phrase summarizing the current task, without a docs: prefix." : ""}`
       : config.writeMode === "handoff"
         ? "4. Source writes are disabled and generic write/edit/move tools are unavailable. Use handoff_to_agent/handoff_to_codex for plans."
         : "4. Write/edit/move tools are disabled. Do not attempt direct file writes; use handoff or context export workflows instead.";
@@ -1930,13 +1930,14 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
     {
       title: "Show Changes",
       description: config.autoCommitDocs
-        ? "Summarize current workspace changes with git status, diff stats, and optional diff, then finalize any pending automatic document commit. Use this once after edits are complete."
+        ? "Summarize current workspace changes with git status, diff stats, and optional diff, then finalize any pending automatic document commit. Use this once after edits are complete, and pass commit_summary from the current task or response."
         : "Summarize the current workspace changes in one review-oriented result with git status, diff stats, and optional diff. Use this instead of bash git status, bash git diff, git_status, or git_diff when reviewing work.",
       inputSchema: {
         workspace_id: z.string().optional().describe("Workspace id from open_workspace. Omit to use default workspace."),
         path: z.string().optional().describe("Optional file path relative to workspace root."),
         staged: z.boolean().optional().describe("Show staged diff. Default: false."),
-        include_diff: z.boolean().optional().describe("Include the unified diff. Default: true.")
+        include_diff: z.boolean().optional().describe("Include the unified diff. Default: true."),
+        commit_summary: z.string().max(96).optional().describe("When auto-commit is enabled, concise English imperative phrase for the commit subject, without the docs: prefix, derived from the current task/response. Example: add documents related to professionals.")
       },
       annotations: config.autoCommitDocs ? AUTO_COMMIT_FINALIZE_ANNOTATIONS : READ_ONLY_ANNOTATIONS,
       _meta: {
@@ -1969,7 +1970,9 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
           ? diffBlock(diff)
           : "\n\nNo diff output."
         : "\n\nDiff omitted by request.";
-      const autoCommit = autoCommitBatcher.flush(workspace);
+      const autoCommit = autoCommitBatcher.flush(workspace, {
+        summary: typeof args.commit_summary === "string" ? args.commit_summary : undefined
+      });
       const text = `# Show Changes\n\nWorkspace: ${workspace.root}\n\n## Changed\n\n${changedText}\n\n## Diff stats\n\n+${stats.additions} -${stats.deletions}${diffText}`;
       return textResult(appendAutoCommitText(text, autoCommit), {
         workspace_id: workspace.id,
@@ -1981,6 +1984,7 @@ export function createCodexProServer(config: CodexProConfig): McpServer {
         changed_files: changedFiles,
         staged: parseBool(args.staged, false),
         include_diff: includeDiff,
+        commit_summary: typeof args.commit_summary === "string" ? args.commit_summary : undefined,
         additions: stats.additions,
         deletions: stats.deletions,
         changed: !statusError && (changedFiles.length > 0 || stats.changed),

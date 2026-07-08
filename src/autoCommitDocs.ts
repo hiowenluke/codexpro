@@ -42,6 +42,10 @@ type PendingBatch = {
   updatedAt: string;
 };
 
+type AutoCommitOptions = {
+  summary?: string;
+};
+
 function runGit(workspace: Workspace, args: string[], maxOutputBytes: number): GitCommandResult {
   const result = spawnSync("git", args, {
     cwd: workspace.root,
@@ -128,13 +132,50 @@ function eligibleAutoCommitPaths(config: CodexProConfig, guard: PathGuard, works
   return [...paths].sort();
 }
 
-function autoCommitMessage(files: string[]): string {
+function autoCommitMessage(files: string[], options: AutoCommitOptions = {}): string {
+  const summary = cleanCommitSummary(options.summary);
+  if (summary) return summary;
   if (files.length === 1) return `docs: update ${cleanMessagePart(path.posix.basename(files[0]))}`;
-  return `docs: auto-commit ${files.length} document files`;
+  return `docs: update ${topicFromFiles(files)}`;
 }
 
 function cleanMessagePart(value: string): string {
-  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "document";
+  return value
+    .replace(/\.[A-Za-z0-9+_-]{1,32}$/g, "")
+    .replace(/^[0-9]+[._-]+/g, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "documents";
+}
+
+function cleanCommitSummary(value: string | undefined): string | undefined {
+  const cleaned = redactSensitiveText(String(value ?? ""))
+    .replace(/[`*_#>\[\]]+/g, "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[.。]+$/g, "")
+    .trim()
+    .slice(0, 96);
+  if (!cleaned) return undefined;
+  if (/^docs(?:\([^)]+\))?!?:\s+/i.test(cleaned)) return cleaned.replace(/^Docs/i, "docs");
+  return `docs: ${cleaned.replace(/^[a-z]+(?:\([^)]+\))?!?:\s+/i, "")}`;
+}
+
+function topicFromFiles(files: string[]): string {
+  const text = files.join(" ").toLowerCase();
+  const original = files.join(" ");
+  if (text.includes("professional") || text.includes("professionals") || original.includes("职业人群")) return "professional store docs";
+  if (text.includes("createyourstore") || original.includes("建店")) return "create your store docs";
+  if (text.includes("plan") && text.includes("price")) return "plan and price docs";
+  if (original.includes("套餐") || original.includes("价格")) return "plan and price docs";
+  if (text.includes("store")) return "store docs";
+  if (text.includes("slogan")) return "slogan docs";
+
+  const names = files.map((file) => cleanMessagePart(path.posix.basename(file))).filter(Boolean);
+  const firstMeaningful = names.find((name) => !/^(index|readme|overview|glossary|metadata)$/i.test(name));
+  return firstMeaningful ? `${firstMeaningful} docs` : "documents";
 }
 
 export function captureAutoCommitSnapshot(config: CodexProConfig, workspace: Workspace): AutoCommitSnapshot {
@@ -157,7 +198,8 @@ function commitDocumentFiles(
   config: CodexProConfig,
   guard: PathGuard,
   workspace: Workspace,
-  requestedFiles: string[]
+  requestedFiles: string[],
+  options: AutoCommitOptions = {}
 ): AutoCommitResult {
   const after = runGit(workspace, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], config.maxOutputBytes);
   if (!after.ok) {
@@ -187,7 +229,7 @@ function commitDocumentFiles(
     return { enabled: true, status: "error", files, error: gitError(staged) };
   }
 
-  const message = autoCommitMessage(files);
+  const message = autoCommitMessage(files, options);
   const commit = runGit(workspace, ["commit", "-m", message, "--", ...files], config.maxOutputBytes);
   if (!commit.ok) {
     return { enabled: true, status: "error", files, message, error: gitError(commit) };
@@ -264,7 +306,7 @@ export class AutoCommitBatcher {
     };
   }
 
-  flush(workspace: Workspace): AutoCommitResult {
+  flush(workspace: Workspace, options: AutoCommitOptions = {}): AutoCommitResult {
     if (!this.config.autoCommitDocs) {
       return { enabled: false, status: "disabled", files: [], reason: "CODEXPRO_AUTO_COMMIT_DOCS is disabled." };
     }
@@ -277,7 +319,7 @@ export class AutoCommitBatcher {
 
     if (batch.timer) clearTimeout(batch.timer);
     this.batches.delete(key);
-    return commitDocumentFiles(this.config, this.guard, workspace, [...batch.files].sort());
+    return commitDocumentFiles(this.config, this.guard, workspace, [...batch.files].sort(), options);
   }
 
   touch(workspace: Workspace): AutoCommitResult {

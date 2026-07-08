@@ -1177,6 +1177,8 @@ codexpro start
 
 Automatic commits require the workspace to be a git repository with normal local commit identity configured. CodexPro skips its own context directory, such as `.ai-bridge`, and reports pending/skipped/error status in tool results without turning a successful file edit into a failed tool call. Because MCP does not expose a literal "ChatGPT response finished" event to the server, `show_changes` is the explicit finalizer ChatGPT should call after edits, with `CODEXPRO_AUTO_COMMIT_DOCS_IDLE_MS` kept as the idle fallback.
 
+When automatic commits are enabled, `show_changes` accepts `commit_summary`. ChatGPT should pass a concise English imperative phrase derived from the current task or response, without the `docs:` prefix, such as `add documents related to professionals`. CodexPro uses it as the commit subject (`docs: add documents related to professionals`). If no summary is provided, CodexPro falls back to a topic inferred from changed file paths instead of a plain file count.
+
 To allow workspace Python scripts in safe bash without editing configuration for every new file, enable workspace Python mode once:
 
 ```bash
