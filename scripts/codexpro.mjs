@@ -951,6 +951,57 @@ function spawnLogged(name, command, args, options = {}) {
   return child;
 }
 
+function createRestartingProcess(name, command, args, options = {}) {
+  const {
+    restartInitialDelayMs = 1000,
+    restartMaxDelayMs = 30000,
+    restartResetAfterMs = 60000,
+    ...spawnOptions
+  } = options;
+  let current = null;
+  let stopped = false;
+  let restartDelayMs = restartInitialDelayMs;
+  let restartTimer = null;
+
+  const start = () => {
+    if (stopped) return current;
+    const startedAt = Date.now();
+    current = spawnLogged(name, command, args, spawnOptions);
+    current.once('exit', (code, signal) => {
+      if (stopped) return;
+      const runtimeMs = Date.now() - startedAt;
+      const delayMs = runtimeMs >= restartResetAfterMs ? restartInitialDelayMs : restartDelayMs;
+      restartDelayMs = runtimeMs >= restartResetAfterMs
+        ? restartInitialDelayMs
+        : Math.min(restartDelayMs * 2, restartMaxDelayMs);
+      console.error(`[${name}] exited code=${code} signal=${signal}; restarting in ${delayMs}ms`);
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        start();
+      }, delayMs);
+      restartTimer.unref();
+    });
+    return current;
+  };
+
+  const stop = () => {
+    stopped = true;
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+    if (current) killProcess(current);
+  };
+
+  return {
+    start,
+    stop,
+    get current() {
+      return current;
+    }
+  };
+}
+
 function waitForCloudflareUrl(child, timeoutMs = 45000) {
   const re = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/g;
   let buffer = '';
@@ -3521,7 +3572,9 @@ async function main() {
   statusLine('wait', 'Starting local MCP server');
   const server = spawnLogged('codexpro', process.execPath, [httpPath], { cwd: projectRoot, env: serverEnv, verbose: verboseLogs });
   let cloudflared;
+  const supervisors = [];
   const cleanup = () => {
+    for (const supervisor of supervisors) supervisor.stop();
     cleanupChildren();
     clearRuntimeConnection(root);
   };
@@ -3577,10 +3630,13 @@ async function main() {
     const configPath = ngrokConfigPath(root, args, profile);
     if (configPath) ngrokArgs.push('--config', configPath);
     statusLine('wait', `Opening ngrok endpoint for ${publicBase}`);
-    cloudflared = spawnLogged('ngrok', ngrokPath, ngrokArgs, { cwd: root, env: process.env, verbose: verboseLogs });
+    const ngrokSupervisor = createRestartingProcess('ngrok', ngrokPath, ngrokArgs, { cwd: root, env: process.env, verbose: verboseLogs });
+    supervisors.push(ngrokSupervisor);
+    cloudflared = ngrokSupervisor.start();
     try {
       await waitForPublicHealth(publicBase, token, cloudflared, 'ngrok');
     } catch (error) {
+      ngrokSupervisor.stop();
       const tail = typeof cloudflared.codexproLogTail === 'function' ? cloudflared.codexproLogTail() : '';
       const hint = [
         '',
@@ -3688,10 +3744,13 @@ async function main() {
   const cloudflaredEnv = cloudflareToken && !cloudflareTokenFile
     ? { ...process.env, TUNNEL_TOKEN: cloudflareToken }
     : process.env;
-  cloudflared = spawnLogged('cloudflared', cloudflaredPath, cloudflaredArgs, { cwd: root, env: cloudflaredEnv, verbose: verboseLogs });
+  const cloudflareSupervisor = createRestartingProcess('cloudflared', cloudflaredPath, cloudflaredArgs, { cwd: root, env: cloudflaredEnv, verbose: verboseLogs });
+  supervisors.push(cloudflareSupervisor);
+  cloudflared = cloudflareSupervisor.start();
   try {
     await waitForPublicHealth(publicBase, token, cloudflared);
   } catch (error) {
+    cloudflareSupervisor.stop();
     const tail = typeof cloudflared.codexproLogTail === 'function' ? cloudflared.codexproLogTail() : '';
     const hint = [
       '',
